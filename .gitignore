@@ -1,0 +1,44 @@
+# Private runtime data and credentials
+**/config.json
+**/messages.jsonl
+**/transfers.jsonl
+**/transfers/
+**/local.properties
+**/*.jks
+**/*.keystore
+**/*.pem
+**/.env
+**/.env.*
+!**/.env.example
+
+# Build outputs and caches
+**/__pycache__/
+**/.pytest_cache/
+**/.mimosa/
+**/.gradle/
+**/.kotlin/
+**/.idea/
+**/build/
+**/dist/
+**/apk/
+**/.venv/
+**/*.pyc
+**/*.log
+**/*.apk
+**/*.aab
+**/*.exe
+**/*.zip
+**/*.part
+**/captures/
+**/node_modules/
+/artifacts/
+/.qa/
+/release/
+/release-*/
+/.release-build/
+
+# Legacy screenshots and UI dumps may contain private messages
+/*.png
+/*.xml
+.DS_Store
+Thumbs.db

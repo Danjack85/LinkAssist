@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">互传助手</string>
+    <string name="app_desc">手机与电脑、手机与手机之间的局域网联机工具:验证码转发、消息互通、文件互传。</string>
+</resources>

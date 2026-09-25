@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LinkAssist · 悬浮球</title>
+  <style>
+    :root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+    #ball { position: fixed; left: 6px; top: 6px; width: 64px; height: 64px; padding: 0; border-radius: 50%; border: 2px solid #56b7a6; background: #223a39; color: #b8eee2; box-shadow: 0 3px 8px rgb(20 45 40 / 24%); display: grid; place-items: center; cursor: grab; transition: border-color .2s, background .2s; }
+    #ball.off { background: #273238; color: #9eb2b9; border-color: #61747b; }
+    #ball:hover { border-color: #85d4c3; background: #2b4743; }
+    #ball:active { cursor: grabbing; }
+    #ball:focus-visible { outline: 2px solid #d7fff3; outline-offset: 2px; }
+    .mark { width: 31px; height: 31px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+    #status { position: absolute; right: 5px; bottom: 5px; width: 11px; height: 11px; border-radius: 50%; background: #24be9e; border: 2px solid #223a39; pointer-events: none; }
+    #ball.off #status { background: #899da5; border-color: #273238; }
+    #badge { position: absolute; top: -4px; right: -4px; min-width: 21px; height: 21px; padding: 0 5px; border: 2px solid #f5faf8; border-radius: 12px; background: #087d6b; color: #fff; font-size: 10px; font-weight: 650; line-height: 17px; text-align: center; pointer-events: none; }
+    [hidden] { display: none !important; }
+    #ball.unread { border-color: #a2ead4; }
+    @media (prefers-reduced-motion: reduce) { #ball { transition: none; } }
+  </style>
+</head>
+<body>
+  <button id="ball" class="off pywebview-drag-region" type="button" aria-label="打开互传助手，正在连接本机服务" title="互传助手 · 正在连接本机服务。点击展开，拖动移动，右键退出。">
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 7-1 1a4.25 4.25 0 0 1-6-6l4-4a4.25 4.25 0 0 1 6 0m2 1 1-1a4.25 4.25 0 0 1 6 6l-4 4a4.25 4.25 0 0 1-6 0" transform="translate(1 0)"/></svg>
+    <span id="status" aria-hidden="true"></span><span id="badge" hidden aria-hidden="true"></span>
+  </button>
+  <script>
+    'use strict';
+    const ball = document.getElementById('ball'), badge = document.getElementById('badge');
+    let unread = 0, online = false, service = false, socket, retryTimer, retryDelay = 1000, handshake;
+    let start = null, moved = false, busy = false;
+    function describe(extra = '') {
+      const state = !service ? '本机服务未连接' : online ? '设备已连接' : '等待设备连接';
+      ball.classList.toggle('off', !service || !online); ball.classList.toggle('unread', unread > 0);
+      badge.hidden = unread === 0; badge.textContent = unread > 99 ? '99+' : String(unread);
+      ball.setAttribute('aria-label', `打开互传助手，${state}${unread ? `，${unread} 条未读消息` : ''}`);
+      ball.title = extra || `互传助手 · ${state}${unread ? ` · ${unread} 条未读` : ''}。点击展开，拖动移动，右键退出。`;
+    }
+    function reconnect() {
+      service = false; online = false; describe(); clearTimeout(retryTimer);
+      retryTimer = setTimeout(connect, retryDelay); retryDelay = Math.min(retryDelay * 2, 15000);
+    }
+    function connect() {
+      clearTimeout(retryTimer); clearTimeout(handshake);
+      if (!['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) return describe('悬浮球仅供本机桌面使用。');
+      let ws; try { ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`); socket = ws; } catch (_) { return reconnect(); }
+      handshake = setTimeout(() => { if (socket === ws && !service) ws.close(); }, 12000);
+      ws.onmessage = event => {
+        if (socket !== ws) return;
+        let data; try { data = JSON.parse(event.data); } catch (_) { return; }
+        if (!data) return;
+        if (data.type === 'init' || data.type === 'status') {
+          service = true; retryDelay = 1000; clearTimeout(handshake);
+          online = Array.isArray(data.deviceInfos) ? data.deviceInfos.some(d => d && d.online !== false) : !!data.connected;
+        } else if (data.type === 'msg' && data.message?.direction !== 'out') unread++;
+        else if (data.type === 'cleared') unread = 0;
+        describe();
+      };
+      ws.onerror = () => ws.close(); ws.onclose = () => { if (socket === ws) { clearTimeout(handshake); reconnect(); } };
+    }
+    async function toggle() {
+      if (busy) return; const api = window.pywebview?.api;
+      if (!api?.toggle_panel) return describe('桌面桥接尚未就绪，请稍后再点击。');
+      busy = true;
+      try { if (await api.toggle_panel()) unread = 0; describe(); }
+      catch (_) { describe('暂时无法展开面板，请重试。'); }
+      finally { busy = false; }
+    }
+    ball.addEventListener('mousedown', event => { if (event.button === 0) { start = [event.screenX, event.screenY]; moved = false; } });
+    window.addEventListener('mousemove', event => {
+      if (!start || moved || !(event.buttons & 1)) return;
+      if (Math.hypot(event.screenX - start[0], event.screenY - start[1]) > 6) { moved = true; try { window.pywebview?.drag?.(); } catch (_) {} }
+    });
+    window.addEventListener('mouseup', () => { start = null; });
+    window.addEventListener('blur', () => { start = null; });
+    ball.addEventListener('click', event => { if (event.detail === 0 || !moved) toggle(); moved = false; });
+    ball.addEventListener('contextmenu', async event => {
+      event.preventDefault(); const api = window.pywebview?.api;
+      if (!api?.quit_app) return describe('退出功能仅在桌面客户端中可用。');
+      if (!confirm('退出互传助手？进行中的文件传输将中断。')) return;
+      try { await api.quit_app(); } catch (_) { describe('未能退出，请从桌面主面板重试。'); }
+    });
+    connect();
+  </script>
+</body>
+</html>

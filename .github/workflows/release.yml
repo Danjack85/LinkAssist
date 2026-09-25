@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (stable semver, e.g. 3.0.0)"
+        required: true
+      versionCode:
+        description: "Android versionCode (integer, must increase)"
+        required: true
+      notes:
+        description: "Update notes shown inside the apps (markdown)"
+        required: false
+        default: "稳定性与连接体验改进"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore signing keystore from secrets
+        env:
+          LINKASSIST_KEYSTORE_BASE64: ${{ secrets.LINKASSIST_KEYSTORE_BASE64 }}
+          LINKASSIST_KEYSTORE_PASSWORD: ${{ secrets.LINKASSIST_KEYSTORE_PASSWORD }}
+          LINKASSIST_KEY_ALIAS: ${{ secrets.LINKASSIST_KEY_ALIAS }}
+          LINKASSIST_KEY_PASSWORD: ${{ secrets.LINKASSIST_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          if (-not $env:LINKASSIST_KEYSTORE_BASE64 -or -not $env:LINKASSIST_KEYSTORE_PASSWORD -or -not $env:LINKASSIST_KEY_ALIAS -or -not $env:LINKASSIST_KEY_PASSWORD) {
+            throw "缺少签名 secrets：请配置 LINKASSIST_KEYSTORE_BASE64 / LINKASSIST_KEYSTORE_PASSWORD / LINKASSIST_KEY_ALIAS / LINKASSIST_KEY_PASSWORD。发布必须使用固定签名，否则手机无法升级安装。"
+          }
+          [IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE\linkassist-release.jks", [Convert]::FromBase64String($env:LINKASSIST_KEYSTORE_BASE64))
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run PC tests
+        run: |
+          python -m pip install -r pc/requirements.txt pytest
+          python -m pytest -q
+
+      - name: Build Windows exe
+        run: |
+          python -m pip install pyinstaller
+          cd pc
+          cmd /c build.bat
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build signed Android APK
+        env:
+          LINKASSIST_KEYSTORE_FILE: ${{ github.workspace }}\linkassist-release.jks
+          LINKASSIST_KEYSTORE_PASSWORD: ${{ secrets.LINKASSIST_KEYSTORE_PASSWORD }}
+          LINKASSIST_KEY_ALIAS: ${{ secrets.LINKASSIST_KEY_ALIAS }}
+          LINKASSIST_KEY_PASSWORD: ${{ secrets.LINKASSIST_KEY_PASSWORD }}
+        run: cd android; ./gradlew.bat :app:assembleRelease --no-daemon
+
+      - name: Verify declared versions match the Android build
+        shell: pwsh
+        run: |
+          $gradle = Get-Content android/app/build.gradle.kts -Raw
+          if ($gradle -notmatch 'versionName\s*=\s*"${{ inputs.version }}"') { throw "android versionName 与发布版本不一致" }
+          if ($gradle -notmatch 'versionCode\s*=\s*${{ inputs.versionCode }}') { throw "android versionCode 与发布参数不一致" }
+
+      - name: Package artifacts and generate update manifest
+        env:
+          REPOSITORY: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          $version = "${{ inputs.version }}"
+          Copy-Item artifacts/windows/LinkAssist.exe "release/LinkAssist-$version-windows-x64.exe"
+          Copy-Item android/app/build/outputs/apk/release/app-release.apk "release/LinkAssist-$version-android.apk"
+          "${{ inputs.notes }}" | Out-File -Encoding utf8 release/notes.txt
+          python scripts/release_manifest.py --repository $env:REPOSITORY --version $version `
+            --version-code ${{ inputs.versionCode }} `
+            --windows "release/LinkAssist-$version-windows-x64.exe" `
+            --android "release/LinkAssist-$version-android.apk" `
+            --notes release/notes.txt --output release/linkassist-update.json
+          Remove-Item linkassist-release.jks -ErrorAction SilentlyContinue
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          $notes = "## 更新说明`n`n${{ inputs.notes }}`n`n### 校验和`n````n" + (Get-Content release/SHA256SUMS.txt -Raw) + "````n"
+          Set-Content -Encoding utf8 release/RELEASE.md $notes
+          gh release create "v$version" --repo $env:REPOSITORY --target $env:GITHUB_REF_NAME `
+            --title "LinkAssist v$version" --notes-file release/RELEASE.md
+          gh release upload "v$version" --repo $env:REPOSITORY `
+            "release/LinkAssist-$version-windows-x64.exe" "release/LinkAssist-$version-android.apk" `
+            release/linkassist-update.json release/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-artifacts
+          path: release/

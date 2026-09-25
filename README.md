@@ -1,0 +1,90 @@
+# 互传助手 LinkAssist
+
+手机 ⇄ 电脑、手机 ⇄ 手机的局域网互传助手：扫码配对、验证码转发、双向聊天、文件互传，数据不出内网，无账号无云端。
+
+> 仓库：`Danjack85/LinkAssist` · 当前版本 **3.0.0 (versionCode 12)**
+
+## 功能总览
+
+1. **扫码配对（推荐）**：电脑端控制台生成一次性连接二维码（5 分钟有效、扫一次即失效），手机 App 扫码确认后自动完成配对；手机开启"手机互连"后同样展示本机二维码，供其他手机扫码直连。
+2. **手动配对码（保留）**：电脑端连接页折叠区内保留 6 位配对码与地址，扫码不可用时（如相机损坏）仍可手动输入；旧版本升级后原配置继续有效。
+3. **验证码自动转发**：手机收到短信验证码自动推送到电脑端，点击大字即可复制；应用内可分别开关短信/通知转发（默认关闭，需主动开启并授权）。
+4. **双向聊天**：电脑端与多台手机互发消息，支持定向发送给指定设备；聊天与验证码记录可搜索、可筛选。
+5. **文件互传**：电脑端多选/拖拽排队上传，进度、速度、取消、失败重试；文件经电脑或互连中心中转到目标设备，每次下载使用独立一次性令牌，SHA-256 完整性校验；电脑发来的文件自动保存到手机 `Download/LinkAssist/`。
+6. **多设备与手机互连**：电脑可同时连接多台手机；手机端可添加多台电脑；任一手机开启互连中心后，其他手机扫码即可加入，两台手机直接互发消息/文件（无需电脑）。
+7. **断线补齐**：前台服务常驻 + 指数退避重连 + 网络回调 + 看门狗；重连后自动拉取历史补齐断线期间错过的消息。
+8. **电脑端桌面版**：悬浮球 + 可缩放主面板 + 系统托盘；面板为全新设计（侧栏导航、浅色内容区、真实连接状态、空态与错误提示）。
+9. **自动检查更新**：电脑端与手机端都会检查 GitHub Releases 上的新版（默认每 12 小时 + 启动时），发现新版本仅提示并附更新说明、发布页与 SHA-256，**下载安装始终需要用户确认**；手机端在 GitHub 不可达（如仓库私有、无网络）时自动回退为向已配对的电脑检查更新。更新仓库可在设置中修改（`owner/repository`）。
+
+## 快速开始
+
+### 1. 电脑端
+
+- 从 [Releases](https://github.com/Danjack85/LinkAssist/releases) 下载 `LinkAssist-x.y.z-windows-x64.exe`（首次运行 SmartScreen 提示选"仍要运行"）。
+- 打开后即为控制台窗口；**手机扫码连接前请确认手机与本机在同一局域网**。
+- 首次放行防火墙需要允许（程序会尝试自动放行 TCP 端口与 UDP 37777）。
+- 无界面模式：`python server.py [端口]`，浏览器打开 `http://127.0.0.1:端口`。
+
+### 2. 手机端扫码连接
+
+1. 打开 App → **设备** 页 → **扫码连接**；
+2. 用手机扫描电脑控制台首页的连接二维码；
+3. 确认对话框中核对电脑名称与地址，点击确认即完成配对并自动连接；
+4. 相机不可用时使用"手动添加电脑"：粘贴电脑地址与 6 位配对码（控制台"连接"页折叠区内查看）。
+
+### 3. 手机互连（无需电脑）
+
+- 在任一手机的 **设备** 页打开"手机互连"开关，页面会显示本机二维码与配对码；
+- 其他手机"扫码连接"扫描该二维码，即可加入互连（消息、验证码、文件都会同步到中心手机）；
+- 也可以手动输入中心手机地址与其配对码。
+
+### 4. 更新
+
+- 电脑端：设置页显示当前版本与更新状态，可手动"检查更新"；发现新版后点击"前往 GitHub 下载"（仅允许跳转到当前配置仓库的 Releases 页面）。
+- 手机端：启动与每 12 小时自动检查（可在设置关闭）；发现新版在设置 → 应用更新中查看说明并确认下载，校验 SHA-256 与包签名后拉起系统安装器。
+
+## 安全设计
+
+- 一次性扫码配对：二维码包含 5 分钟有效的一次性密钥，消费即失效，与长期配对码分离；连续错误尝试会被限速。
+- 配对码/密钥不出现在 UDP 发现应答中；电脑控制台（网页、二维码、配置接口）**仅允许本机访问**，手机端只能通过 App 或设备连接接口访问。
+- 文件传输：文件名清洗、512 MB 上限、SHA-256 校验、短期一次性下载令牌（每个接收者独立）；取消/失败清理临时文件。
+- 更新：仅信任 `api.github.com` 与当前配置仓库的 `github.com` HTTPS 地址，清单与 Release 附件双向校验（版本、大小、SHA-256），APK 安装前校验包名与签名；自动检查绝不自动下载安装。
+- 旧版注意事项仍然适用：服务监听局域网，请勿将端口暴露公网；短信/通知转发默认关闭。
+
+## 发布（维护者）
+
+1. 在 `android/app/build.gradle.kts` 更新 `versionName` / `versionCode`，同步 `pc/updater.py` 的 `VERSION`；
+2. 配置仓库 secrets：`LINKASSIST_KEYSTORE_BASE64`、`LINKASSIST_KEYSTORE_PASSWORD`、`LINKASSIST_KEY_ALIAS`、`LINKASSIST_KEY_PASSWORD`（发布必须固定签名）；
+3. 运行 GitHub Actions **Release** workflow（填 version / versionCode / 更新说明），自动跑测试 → 构建 Windows exe 与签名 APK → 生成 `linkassist-update.json`（含 SHA-256）→ 发布 Release；
+4. 注意：**私有仓库无法被客户端匿名检查更新**；如需自动更新功能对用户可用，请将 Release 仓库公开，或保持手机端经已配对电脑更新的备用通道。
+
+## 开发
+
+```
+LinkAssist/
+├── pc/                  电脑端(Python + aiohttp + pywebview)
+│   ├── server.py        服务主体(WebSocket + HTTP + 扫码配对 + 更新检查)
+│   ├── pairing.py       一次性配对二维码
+│   ├── updater.py       GitHub Releases 检查
+│   ├── static/          控制台界面(原生 HTML/CSS/JS)
+│   ├── tests/           pytest 回归(45 项)
+│   └── build.bat        PyInstaller 打包
+├── android/             手机端(Kotlin + Compose)
+│   └── app/src/...      Pairing/QrScannerActivity/HubServer/Updater/UpdateWorker 等
+└── scripts/             release_manifest.py 发布清单生成
+```
+
+- 电脑端：`pip install -r pc/requirements.txt -r pc/requirements-dev.txt && pytest`（`pc/tests` 为隔离测试，不需要真机；真机冒烟用 `LINKASSIST_HUB_URL/LINKASSIST_HUB_TOKEN` 运行 `pc/tests/test_hub_client.py`）；
+- 手机端：Android Studio 打开 `android/`，或 `cd android && gradlew.bat assembleDebug`；单元测试 `gradlew.bat :app:testDebugUnitTest`；
+- 端口：默认 8765，被占用时桌面版自动顺延；UDP 37777 用于局域网发现（只回名称与地址，不携带任何密钥）。
+
+## 常见问题
+
+- **扫码后连接失败？** 确认手机与电脑同一 Wi-Fi；Windows 防火墙放行 TCP 8765 与 UDP 37777；二维码 5 分钟未扫会过期，点控制台"刷新"。
+- **检查更新提示"仓库是私有仓库或尚无 Release"？** 自动检查需要公开的 GitHub Release；私有仓库可手动下载，手机端会自动改用已配对电脑作为更新源。
+- **模拟器测试**：电脑地址填 `10.0.2.2`；`adb emu sms send 10086 "【淘宝】验证码582914"` 可模拟短信。
+- **收不到验证码转发？** 在 App 设置中开启"短信转发"并授予短信权限；通知转发需授予"通知使用权"。
+
+## 设计参考
+
+[SmsForwarder](https://github.com/pppscn/smsforwarder) · [KDE Connect](https://github.com/kde/kdeconnect-kde) · [LocalSend](https://github.com/localsend/localsend) · [android_income_sms_gateway_webhook](https://github.com/bogkonstantin/android_income_sms_gateway_webhook)

@@ -1,0 +1,15 @@
+<resources>
+    <style name="LinkAssistTheme" parent="AppTheme">
+        <item name="android:windowBackground">#101716</item>
+        <item name="android:statusBarColor">#101716</item>
+        <item name="android:navigationBarColor">#101716</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">#56D6BC</item>
+    </style>
+    <style name="LinkAssistScannerTheme" parent="zxing_CaptureTheme">
+        <item name="android:statusBarColor">#101716</item>
+        <item name="android:navigationBarColor">#101716</item>
+        <item name="android:colorAccent">#56D6BC</item>
+    </style>
+</resources>

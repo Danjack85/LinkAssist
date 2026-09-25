@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>互传助手 · LinkAssist</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css?v=5">
+  <script src="/static/app.js?v=5" defer></script>
+</head>
+<body>
+  <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 7-1 1a4.25 4.25 0 0 1-6-6l4-4a4.25 4.25 0 0 1 6 0m2 1 1-1a4.25 4.25 0 0 1 6 6l-4 4a4.25 4.25 0 0 1-6 0" transform="translate(1 0)"/></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="11" rx="2"/><path d="M5 20h8m-4-5v5"/><rect x="17" y="9" width="5" height="12" rx="1.5"/><path d="M19 18h1"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 5h4m-3 14h2"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 11a8 8 0 0 1-8 8H7l-5 3 1.5-6A8 8 0 0 1 2 11a8 8 0 0 1 8-8h3a8 8 0 0 1 8 8Z"/><path d="M7 9h9m-9 4h6"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6M8 13h8m-8 4h5"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 1 7M3 4v6h6m3-3v5l3 2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h6m4 0h6M4 17h10m4 0h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h3v3h3m-6 3h3m3-6v-3M3 12h3m6-9v3m0 6h3m-3 3v3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7a9 9 0 0 0-15-2L2 8m0-6v6h6m-4 9a9 9 0 0 0 15 2l3-3m0 6v-6h-6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v1M3 7h16a2 2 0 0 1 2 2l-2 10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 8 3v6c0 5-4 9-8 11-4-2-8-6-8-11V5Zm-4 9 3 3 5-5"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><path d="M3 8a14 14 0 0 1 18 0M6 12a9 9 0 0 1 12 0m-9 4a4 4 0 0 1 6 0"/><circle cx="12" cy="20" r=".7"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14m0-10H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-5"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 8-3 8-3 10h18c0-2-3-2-3-10M9 21h6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m3 3 19 9-19 9 4-9Zm4 9h15"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+  </svg>
+
+  <a class="skip-link" href="#mainContent">跳到主内容</a>
+  <div class="desktop-titlebar" id="desktopTitlebar" hidden>
+    <div class="titlebar-label pywebview-drag-region"><svg class="icon"><use href="#i-link"/></svg><span>LinkAssist · 互传助手</span></div>
+    <button class="window-button" id="btnCollapse" type="button" title="收起到悬浮球" aria-label="收起到悬浮球"><svg class="icon"><use href="#i-minus"/></svg></button>
+    <button class="window-button window-close" id="btnQuit" type="button" title="退出互传助手" aria-label="退出互传助手"><svg class="icon"><use href="#i-close"/></svg></button>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand"><span class="brand-mark"><svg class="icon"><use href="#i-link"/></svg></span><div><strong>互传助手</strong><span>LinkAssist</span></div></div>
+      <div class="nav-caption">你的设备工作台</div>
+      <nav class="navigation" aria-label="功能页面">
+        <button class="nav-item active" type="button" data-view="connections" aria-current="page"><svg class="icon"><use href="#i-devices"/></svg><span>设备连接</span></button>
+        <button class="nav-item" type="button" data-view="messages"><svg class="icon"><use href="#i-message"/></svg><span>消息</span><span class="nav-count" id="navMessageCount" hidden></span></button>
+        <button class="nav-item" type="button" data-view="files"><svg class="icon"><use href="#i-file"/></svg><span>文件</span></button>
+        <button class="nav-item" type="button" data-view="history"><svg class="icon"><use href="#i-history"/></svg><span>历史</span></button>
+        <button class="nav-item" type="button" data-view="settings"><svg class="icon"><use href="#i-settings"/></svg><span>设置</span></button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="local-label"><svg class="icon"><use href="#i-shield"/></svg><span>本机工作台</span></div>
+        <p>局域网连接，不必绕远路。</p>
+        <div class="sidebar-status"><span class="dot" id="sidebarDot"></span><span id="sidebarStatus">正在连接本机服务</span></div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb"><span>工作台</span><span class="breadcrumb-slash">/</span><strong id="viewLabel">设备连接</strong></div>
+        <div class="topbar-actions">
+          <label class="top-recipient" id="topRecipient" hidden><span>发送至</span><select id="recipientSelect" aria-label="消息与文件的接收对象"><option value="">全部在线设备</option></select></label>
+          <div class="service-status" role="status"><span class="dot" id="dotService"></span><span id="serviceText">正在连接</span></div>
+          <button class="button secondary small" id="btnQuickPair" type="button"><svg class="icon"><use href="#i-qr"/></svg><span>连接设备</span></button>
+        </div>
+      </header>
+      <div class="service-banner" id="connectionNotice" role="status"><svg class="icon"><use href="#i-info"/></svg><span id="connectionNoticeText">正在与本机服务建立连接…</span><button class="text-button" id="btnReconnect" type="button" disabled>立即重连</button></div>
+
+      <div class="workspace-scroll" id="mainScroll" tabindex="0" role="region" aria-label="工作台内容，可滚动">
+        <div class="content-grid">
+          <main id="mainContent" tabindex="-1">
+            <header class="page-heading"><p class="eyebrow" id="viewEyebrow">CONNECTED WORKSPACE</p><h1 id="pageTitle" tabindex="-1">连接你的设备</h1><p id="pageDescription">一次扫码，让手机与电脑在同一局域网内互通。</p></header>
+
+            <section class="page" id="page-connections" aria-labelledby="pageTitle">
+              <article class="panel pairing-card" aria-labelledby="pairTitle">
+                <header class="panel-heading"><div><h2 id="pairTitle">扫码连接电脑</h2><p>从连接开始，把两块屏幕连在一起。</p></div><span class="badge neutral">局域网配对</span></header>
+                <div class="pairing-body">
+                  <div class="qr-column">
+                    <div class="qr-frame" id="qrFrame" aria-busy="true">
+                      <img id="qrImage" width="232" height="232" alt="使用手机端 LinkAssist 扫描此二维码连接电脑" hidden>
+                      <div class="qr-placeholder" id="qrPlaceholder"><svg class="icon"><use href="#i-qr"/></svg><strong id="qrState">正在准备二维码</strong><p id="qrHint">由本机服务安全生成</p></div>
+                    </div>
+                    <div class="qr-caption"><span class="dot" id="qrDot"></span><span id="pairCountdown" role="timer" aria-live="off" aria-label="二维码有效时间">等待配对信息</span></div>
+                    <div class="qr-actions"><button class="button ghost small" id="btnRefreshPair" type="button" disabled><svg class="icon"><use href="#i-refresh"/></svg>刷新</button><button class="button ghost small" id="btnCopyPair" type="button" disabled><svg class="icon"><use href="#i-copy"/></svg>复制连接码</button></div>
+                  </div>
+                  <div class="pair-guidance">
+                    <h3>手机扫一扫，即刻连接</h3>
+                    <ol class="pair-steps">
+                      <li><span class="step-number">01</span><div><strong>连接同一网络</strong><p>电脑与手机接入同一 Wi-Fi，或可互通的局域网。</p></div></li>
+                      <li><span class="step-number">02</span><div><strong>打开手机端 LinkAssist</strong><p>选择扫码连接，扫描左侧二维码。</p></div></li>
+                      <li><span class="step-number">03</span><div><strong>确认设备上线</strong><p>设备出现在下方后，即可收发消息与文件。</p></div></li>
+                    </ol>
+                    <label class="field-label" for="hostSelect">网络接口</label>
+                    <select id="hostSelect" disabled><option value="">正在读取网络接口…</option></select>
+                    <p class="field-help" id="pairHostHint">多网卡时，选择手机可访问的 IPv4 地址。</p>
+                  </div>
+                </div>
+                <p class="inline-notice error" id="pairError" role="status" hidden></p>
+                <details class="manual-pair" id="manualPair">
+                  <summary><svg class="icon"><use href="#i-link"/></svg><span>无法扫码？使用手动配对</span><svg class="icon chevron"><use href="#i-chevron"/></svg></summary>
+                  <div class="manual-content"><p>仅在手机端填写以下信息；电脑控制台不对其他设备开放。</p><dl class="manual-grid">
+                    <div><dt>连接地址</dt><dd><code id="detailAddr">等待服务连接</code><button class="icon-button" id="btnCopyAddr" type="button" aria-label="复制手机端连接地址" disabled><svg class="icon"><use href="#i-copy"/></svg></button></dd></div>
+                    <div><dt>手动配对码</dt><dd><code id="detailToken">等待服务连接</code><button class="icon-button" id="btnCopyToken" type="button" aria-label="复制手动配对码" disabled><svg class="icon"><use href="#i-copy"/></svg></button></dd></div>
+                    <div><dt>电脑名称</dt><dd id="detailName">等待服务连接</dd></div>
+                  </dl></div>
+                </details>
+              </article>
+              <article class="panel devices-panel" aria-labelledby="devicesTitle">
+                <header class="panel-heading tight"><h2 id="devicesTitle">在线设备</h2><span class="subtle" id="deviceCount">待同步</span></header>
+                <div class="device-list" id="deviceList"></div>
+                <div class="empty-state compact" id="deviceEmpty"><span class="empty-icon"><svg class="icon"><use href="#i-phone"/></svg></span><div><strong id="deviceEmptyTitle">等待手机连接</strong><p id="deviceEmptyHint">扫码完成后，设备会显示在这里。</p></div></div>
+                <div class="panel-foot"><svg class="icon"><use href="#i-network"/></svg><span id="channelText">正在建立实时通道</span></div>
+              </article>
+            </section>
+
+            <section class="page" id="page-messages" aria-labelledby="pageTitle" hidden>
+              <article class="panel messages-panel">
+                <div class="message-toolbar"><div class="filter-tabs" role="group" aria-label="消息分类"><button class="filter active" type="button" data-filter="all" aria-pressed="true">全部</button><button class="filter" type="button" data-filter="code" aria-pressed="false">验证码 / 通知</button><button class="filter" type="button" data-filter="chat" aria-pressed="false">聊天</button></div><button class="text-button muted" id="btnClear" type="button" disabled><svg class="icon"><use href="#i-trash"/></svg>清空</button></div>
+                <label class="search-field message-search"><svg class="icon"><use href="#i-search"/></svg><input id="messageSearch" type="search" placeholder="搜索消息、来源或验证码" aria-label="搜索消息、来源或验证码" autocomplete="off"></label>
+                <div class="feed-wrap" id="feedWrap" tabindex="0" role="region" aria-label="消息阅读区，可滚动"><div class="feed" id="feed" role="list" aria-label="消息列表，最新消息在前"></div><div class="empty-state tall" id="messageEmpty"><span class="empty-icon"><svg class="icon"><use href="#i-message"/></svg></span><strong id="messageEmptyTitle">让消息在设备间流动</strong><p id="messageEmptyHint">连接手机后，聊天、验证码与通知会显示在这里。</p></div></div>
+                <form class="composer" id="messageComposer"><div class="composer-heading"><label for="messageInput">发送消息</label><label class="composer-recipient"><span>接收对象</span><select id="recipientComposer" aria-label="消息接收对象，与文件发送同步"><option value="">全部在线设备</option></select></label></div><textarea id="messageInput" rows="3" maxlength="10000" placeholder="写点什么，让另一端接着继续…" aria-describedby="composeHint"></textarea><div class="composer-bottom"><p id="composeHint" role="status">连接手机后即可发送。Enter 发送，Shift + Enter 换行。</p><button class="button primary" id="btnSend" type="submit" disabled><svg class="icon"><use href="#i-send"/></svg><span id="sendLabel">发送</span></button></div></form>
+              </article>
+            </section>
+
+            <section class="page" id="page-files" aria-labelledby="pageTitle" hidden>
+              <article class="panel upload-panel"><header class="panel-heading"><div><h2>把文件发送到另一端</h2><p>接收对象与消息同步，加入队列后不会自动改发。</p></div></header><div class="dropzone" id="dropZone" tabindex="0" role="group" aria-label="拖入多个文件，或按 Enter 选择文件" aria-disabled="true"><span class="upload-icon"><svg class="icon"><use href="#i-upload"/></svg></span><strong>拖入文件，轻松接力</strong><p>支持多选 · 按加入顺序传输 · 单文件最大 512 MiB</p><button class="button primary" id="btnPickFile" type="button" disabled><svg class="icon"><use href="#i-file"/></svg>选择文件</button><input id="fileInput" type="file" multiple hidden></div><p class="upload-hint" id="uploadHint">连接手机后即可发送文件。</p></article>
+              <div class="section-heading"><div><h2>传输队列</h2><span class="subtle" id="queueSummary">暂无记录</span></div><div class="button-group"><button class="button ghost small" id="btnFolder" type="button"><svg class="icon"><use href="#i-folder"/></svg>接收文件夹</button><button class="icon-button" id="btnRefreshTransfers" type="button" aria-label="刷新传输记录" title="刷新传输记录"><svg class="icon"><use href="#i-refresh"/></svg></button></div></div>
+              <p class="inline-notice error" id="transferError" role="status" hidden></p>
+              <div class="transfer-list" id="transferList" role="list" aria-label="文件传输队列"></div>
+              <div class="empty-state panel" id="transferEmpty"><span class="empty-icon"><svg class="icon"><use href="#i-file"/></svg></span><strong>还没有传输记录</strong><p>选几个文件，让工作从这里接着走。</p></div>
+              <p class="section-note">“中转就绪”表示文件已上传到电脑服务，不代表手机已保存。失败任务可在本次打开期间重试。</p>
+            </section>
+
+            <section class="page" id="page-history" aria-labelledby="pageTitle" hidden>
+              <div class="history-tools"><label class="search-field"><svg class="icon"><use href="#i-search"/></svg><input id="historySearch" type="search" placeholder="搜索文件名、设备或状态" aria-label="搜索传输历史" autocomplete="off"></label><select id="historyFilter" aria-label="筛选传输状态"><option value="all">全部状态</option><option value="active">进行中</option><option value="complete">已送达 / 中转就绪</option><option value="failed">失败</option><option value="cancelled">已取消</option></select><button class="icon-button" id="btnRefreshHistory" type="button" aria-label="刷新历史记录" title="刷新历史记录"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+              <p class="inline-notice error" id="historyError" role="status" hidden></p><div class="transfer-list" id="historyList" role="list" aria-label="传输历史，最新记录在前"></div><div class="empty-state panel tall" id="historyEmpty"><span class="empty-icon"><svg class="icon"><use href="#i-history"/></svg></span><strong id="historyEmptyTitle">每一次传输，都留有记录</strong><p id="historyEmptyHint">文件传输开始后，可在这里查看结果与重新下载。</p></div>
+            </section>
+
+            <section class="page" id="page-settings" aria-labelledby="pageTitle" hidden>
+              <article class="panel settings-panel"><header class="panel-heading"><h2>版本与更新</h2><span class="badge neutral" id="updateStatus">尚未获取</span></header><div class="version-grid"><div><span>当前版本</span><strong id="currentVersion">—</strong></div><div><span>最新发布</span><strong id="latestVersion">尚未获取</strong></div></div><p class="update-message" id="updateMessage" role="status">连接本机服务后读取更新信息。</p><div class="update-actions"><button class="button secondary" id="btnCheckUpdates" type="button" disabled><svg class="icon"><use href="#i-refresh"/></svg>检查更新</button><button class="button primary" id="btnDownloadUpdate" type="button" hidden><svg class="icon"><use href="#i-external"/></svg>前往 GitHub 下载</button></div><p class="field-help" id="updateCheckedAt">尚未检查</p><details class="release-details" id="releaseDetails" hidden><summary>版本说明与校验信息<svg class="icon chevron"><use href="#i-chevron"/></svg></summary><pre id="releaseNotes" class="release-notes"></pre><dl class="release-meta"><div><dt>安装包大小</dt><dd id="updateSize">未提供</dd></div><div><dt>SHA-256</dt><dd><code id="updateSha">未提供</code></dd></div></dl></details></article>
+              <form class="panel settings-panel" id="updateSettings"><header class="panel-heading"><h2>更新偏好</h2></header><label class="checkbox-field"><input id="autoCheckUpdates" type="checkbox"><span><strong>自动检查更新</strong><small>仅检查新版本，不自动下载或安装。</small></span></label><label class="field-label" for="updateRepository">GitHub 更新来源</label><input class="text-input" id="updateRepository" placeholder="owner/repo" maxlength="140" spellcheck="false" autocomplete="off" aria-describedby="repositoryHint"><p class="field-help" id="repositoryHint">填写仓库名 owner/repo。私有仓库或未发布 Release 时会显示实际检查结果。</p><div class="settings-save"><span class="field-help" id="settingsHint" role="status">偏好保存在本机。</span><button class="button primary" id="btnSaveSettings" type="submit" disabled>保存设置</button></div></form>
+              <div class="settings-footnote"><svg class="icon"><use href="#i-shield"/></svg><p>更新检查不影响当前传输。下载由你确认并在 GitHub 完成，互传助手不会自动安装。</p></div>
+            </section>
+          </main>
+
+          <aside class="context-rail" aria-label="辅助信息">
+            <article class="rail-card"><header class="rail-heading"><h2>最近传输</h2><button class="icon-button" id="btnAllHistory" type="button" title="查看全部传输历史" aria-label="查看全部传输历史"><svg class="icon"><use href="#i-arrow"/></svg></button></header><div id="recentTransfers" class="recent-list" role="list" aria-label="最近三项传输"></div><div class="rail-empty" id="recentEmpty"><svg class="icon"><use href="#i-file"/></svg><p>还没有传输记录</p><span>收发过的文件会显示在这里。</span></div><p class="rail-error" id="recentError" role="status" hidden></p></article>
+            <article class="rail-card tips-card"><span class="rail-kicker">一点小提示</span><h2>连接顺畅，从这里开始</h2><div class="tip"><svg class="icon"><use href="#i-network"/></svg><div><strong>保持网络互通</strong><p>访客 Wi-Fi 或网络隔离可能阻止设备连接。</p></div></div><div class="tip"><svg class="icon"><use href="#i-devices"/></svg><div><strong>多个设备，有序协作</strong><p>在发送区域选择接收对象，留空则发送给全部在线设备。</p></div></div><div class="tip"><svg class="icon"><use href="#i-folder"/></svg><div><strong>文件在哪里？</strong><p>手机发来的文件可在电脑的接收文件夹中查看。</p></div></div></article>
+            <div class="privacy-note"><svg class="icon"><use href="#i-shield"/></svg><div><strong>只在你的设备之间</strong><p>控制台仅供本机访问。扫码连接码五分钟有效，使用一次后即失效。</p></div></div>
+            <p class="rail-signature">LinkAssist <span>少一点来回，多一点协同。</span></p>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+  <iframe name="downloadFrame" id="downloadFrame" title="文件下载" sandbox="allow-downloads allow-same-origin" hidden></iframe>
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <noscript><div class="noscript">请启用 JavaScript，才能连接设备与传输文件。</div></noscript>
+</body>
+</html>
