@@ -34,7 +34,7 @@ def main():
     windows = asset(args.windows)
     android = dict(asset(args.android), versionName=args.version, versionCode=args.version_code)
     manifest = {"schemaVersion": 1, "version": args.version,
-                "notes": args.notes.read_text(encoding="utf-8"), "windows": windows, "android": android}
+                "notes": args.notes.read_text(encoding="utf-8-sig").strip(), "windows": windows, "android": android}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     checksums = "".join(f"{item['sha256']}  {item['file']}\n" for item in (windows, android))
