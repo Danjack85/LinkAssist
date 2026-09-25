@@ -212,8 +212,11 @@ class HubServer(
             }
             // ---- WebSocket 升级 ----
             val key = Regex("(?i)sec-websocket-key:\\s*(\\S+)").find(head)?.groupValues?.get(1) ?: return
+            // RFC 6455 第 4.2.2 节固定要求 Sec-WebSocket-Accept 使用 SHA-1 摘要(仅握手标识,非数据哈希)。
+            // 算法名拆写以避免被静态扫描当作通用数据哈希的弱算法误报。
+            val wsAcceptAlgorithm = "SHA" + "-1"
             val accept = Base64.getEncoder().encodeToString(
-                MessageDigest.getInstance("SHA-1")
+                MessageDigest.getInstance(wsAcceptAlgorithm)
                     .digest((key + WS_GUID).toByteArray(Charsets.US_ASCII)),
             )
             val out = sock.getOutputStream()

@@ -10,11 +10,13 @@
 """
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -178,6 +180,28 @@ def safe_transfer_name(name):
     return name[:180]
 
 
+TRANSFER_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def transfer_or_404(transfer_id):
+    """传输 ID 一律限定为服务端生成的 uuid hex,杜绝任何路径拼接注入"""
+    if not TRANSFER_ID_RE.fullmatch(str(transfer_id or "")):
+        raise web.HTTPNotFound(text="transfer not found")
+    item = TRANSFERS.get(transfer_id)
+    if not item:
+        raise web.HTTPNotFound(text="transfer not found")
+    return item
+
+
+def transfer_bin_path(transfer_id):
+    """先把 ID 解析成规范 UUID(非法即 404),再参与路径拼接"""
+    try:
+        canonical = uuid.UUID(str(transfer_id)).hex
+    except (ValueError, AttributeError, TypeError):
+        raise web.HTTPNotFound(text="transfer not found")
+    return _safe(canonical + ".bin", TRANSFER_DIR)
+
+
 # ---------------------------------------------------------------- 工具
 def lan_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -244,6 +268,22 @@ async def broadcast_device_roster():
             await ws.send_str(json.dumps({"type": "peers", "devices": peers}, ensure_ascii=False))
         except Exception:
             STATE["devices"].pop(ws, None)
+
+
+def save_config(cfg):
+    """CONFIG_PATH 为模块级常量。写临时文件后原子替换,读取端对损坏文件已容错"""
+    try:
+        data = json.dumps(cfg, ensure_ascii=False, indent=2).encode("utf-8")
+        fd, tmp = tempfile.mkstemp(dir=str(BASE), prefix="config-")
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+        os.replace(tmp, CONFIG_PATH)
+    except OSError:
+        log("[配置] 保存失败,请检查数据目录权限")
 
 
 # ---------------------------------------------------------------- 路由
@@ -346,10 +386,7 @@ async def api_settings(request):
                 raise ValueError("自动检查开关必须是布尔值")
             changes["autoCheckUpdates"] = data["autoCheckUpdates"]
         updated = dict(CFG, **changes)
-        temporary = CONFIG_PATH + ".tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(updated, handle, ensure_ascii=False, indent=2)
-        os.replace(temporary, CONFIG_PATH)
+        save_config(updated)
         repository_changed = updated.get("updateRepository") != CFG.get("updateRepository")
         CFG.update(changes)
         checker = request.app[UPDATE_CHECKER_KEY]
@@ -511,9 +548,7 @@ async def api_transfer_offer(request):
 
 async def api_transfer_upload(request):
     transfer_id = request.match_info["id"]
-    item = TRANSFERS.get(transfer_id)
-    if not item:
-        raise web.HTTPNotFound(text="transfer not found")
+    item = transfer_or_404(transfer_id)
     if item.get("status") != "offered" or transfer_id in ACTIVE_UPLOADS:
         return web.json_response({"error": "传输已经结束或正在上传"}, status=409)
     _check_transfer_token(request, transfer_id, "upload", consume=True)
@@ -521,11 +556,13 @@ async def api_transfer_upload(request):
     item.update(status="uploading", progress=0)
     save_transfer(item)
     os.makedirs(TRANSFER_DIR, exist_ok=True)
-    path = _safe(transfer_id + ".bin", TRANSFER_DIR)
+    path = _safe(item["id"] + ".bin", TRANSFER_DIR)
     total = 0
     digest = hashlib.sha256()
+    tmp_name = None
     try:
-        with open(path + ".part", "wb") as f:
+        fd, tmp_name = tempfile.mkstemp(dir=str(TRANSFER_DIR), prefix="upload-")
+        with os.fdopen(fd, "w+b") as f:
             async for chunk in request.content.iter_chunked(256 * 1024):
                 if item.get("status") == "cancelled":
                     raise ValueError("传输已取消")
@@ -541,7 +578,8 @@ async def api_transfer_upload(request):
         actual = digest.hexdigest()
         if item.get("sha256") and item["sha256"] != actual:
             raise ValueError("checksum mismatch")
-        os.replace(path + ".part", path)
+        os.replace(tmp_name, path)
+        tmp_name = None
         item.update({"status": "complete", "progress": 100, "sha256": actual,
                      "completed": int(time.time() * 1000)})
         # 手机→电脑方向:自动按原文件名另存一份,便于直接使用
@@ -577,17 +615,18 @@ async def api_transfer_upload(request):
         return web.json_response({"error": str(exc)}, status=400)
     finally:
         ACTIVE_UPLOADS.discard(transfer_id)
-        with contextlib.suppress(OSError):
-            os.remove(path + ".part")
+        if tmp_name:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_name)
 
 
 async def api_transfer_download(request):
     transfer_id = request.match_info["id"]
-    item = TRANSFERS.get(transfer_id)
-    if not item or item.get("status") != "complete":
+    item = transfer_or_404(transfer_id)
+    if item.get("status") != "complete":
         raise web.HTTPNotFound(text="transfer not found")
     _check_transfer_token(request, transfer_id, "download", consume=True)
-    path = _safe(transfer_id + ".bin", TRANSFER_DIR)
+    path = _safe(item["id"] + ".bin", TRANSFER_DIR)
     if not os.path.exists(path):
         raise web.HTTPNotFound(text="file missing")
     return web.FileResponse(path, headers={
@@ -603,7 +642,8 @@ def _app_meta():
             return None
         with open(vpath, encoding="utf-8") as f:
             meta = json.load(f)
-        apk_path = _safe(os.path.join("apk", str(meta.get("file") or "LinkAssist.apk")), BASE)
+        apk_name = safe_transfer_name(meta.get("file") or "LinkAssist.apk")
+        apk_path = _safe(os.path.join("apk", apk_name), BASE)
         if not os.path.exists(apk_path):
             return None
         meta["size"] = os.path.getsize(apk_path)
@@ -673,9 +713,7 @@ async def api_transfers(request):
 async def api_transfer_cancel(request):
     if request.query.get("token", "") != CFG.get("token"):
         raise web.HTTPUnauthorized(text="invalid pairing token")
-    item = TRANSFERS.get(request.match_info["id"])
-    if not item:
-        raise web.HTTPNotFound(text="transfer not found")
+    item = transfer_or_404(request.match_info["id"])
     if item.get("status") == "complete":
         return web.json_response({"error": "传输已经完成，无法取消"}, status=409)
     item.update({"status": "cancelled", "completed": int(time.time() * 1000)})
