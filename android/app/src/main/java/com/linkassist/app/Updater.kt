@@ -125,7 +125,7 @@ object Updater {
         require(manifests.size == 1) { "Release 未发布唯一的 linkassist-update.json" }
         val manifestAsset = manifests.single()
         require(strictLong(manifestAsset, "size") in 1..UpdatePolicy.MAX_METADATA_BYTES.toLong()) { "更新清单大小无效" }
-        val manifestUrl = UpdatePolicy.assetUrl(manifestAsset.getString("browser_download_url"), repo, tag, "linkassist-update.json")
+        val manifestUrl = assetFetchUrl(repo, manifestAsset, tag, "linkassist-update.json")
         val manifest = githubAsset(client, manifestUrl, repo).use { resp ->
             if (!resp.isSuccessful) throw IOException(if (resp.code == 404) "GitHub 仓库私有或尚未发布" else "更新清单 HTTP ${resp.code}")
             jsonBody(resp)
@@ -143,7 +143,10 @@ object Updater {
         UpdatePolicy.apkMetadata(name, code, size, hash)
         val file = android.getString("file")
         require(file.length in 5..200 && file.endsWith(".apk", true)) { "APK 文件名无效" }
-        val downloadUrl = UpdatePolicy.assetUrl(android.getString("url"), repo, tag, file)
+        val apkAssets = (0 until assets.length()).map { assets.getJSONObject(it) }
+            .filter { it.optString("name") == file }
+        val downloadUrl = if (apkAssets.size == 1) assetFetchUrl(repo, apkAssets.single(), tag, file)
+        else UpdatePolicy.assetUrl(android.getString("url"), repo, tag, file)
         return Remote("", 443, "", name, code, size, "github", notes, releaseUrl, downloadUrl, hash)
     }
 
@@ -165,10 +168,24 @@ object Updater {
             .addPathSegments("api/app/$action").addQueryParameter("token", token).build()
     }
 
+    /** 优先走 api.github.com 资产接口(部分网络仅此可达),失败回退 github.com 浏览器地址 */
+    private fun assetFetchUrl(repo: String, asset: JSONObject, tag: String?, file: String?): String =
+        try {
+            UpdatePolicy.assetApiUrl(repo, strictLong(asset, "id"))
+        } catch (_: Exception) {
+            UpdatePolicy.assetUrl(asset.getString("browser_download_url"), repo, tag, file)
+        }
+
     private fun githubAsset(http: OkHttpClient, initial: String, repo: String): Response {
-        var url = UpdatePolicy.assetUrl(initial, repo).toHttpUrl()
+        var url = (if (initial.startsWith("https://api.github.com/repos/")) initial
+        else UpdatePolicy.assetUrl(initial, repo)).toHttpUrl()
         repeat(6) { hop ->
-            val resp = http.newCall(Request.Builder().url(url).header("User-Agent", "LinkAssist-Android").build()).execute()
+            val resp = http.newCall(
+                Request.Builder().url(url)
+                    .header("User-Agent", "LinkAssist-Android")
+                    .header("Accept", "application/octet-stream")
+                    .build(),
+            ).execute()
             if (resp.code !in setOf(301, 302, 303, 307, 308)) return resp
             val next = resp.header("Location")?.let { url.resolve(it) }
             resp.close()

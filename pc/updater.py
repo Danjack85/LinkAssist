@@ -7,7 +7,7 @@ from urllib.parse import unquote, urlsplit
 
 import aiohttp
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 DEFAULT_REPOSITORY = "Danjack85/LinkAssist"
 CHECK_INTERVAL = 12 * 60 * 60
 METADATA_LIMIT = 1024 * 1024
@@ -99,9 +99,10 @@ class UpdateChecker:
         if self.publish:
             await self.publish({"type": "update", "update": self.snapshot()})
 
-    async def _json(self, session, url, asset=False):
+    async def _json(self, session, url, asset=False, accept="application/vnd.github+json"):
         for _ in range(5):
-            async with session.get(url, allow_redirects=False) as response:
+            async with session.get(url, allow_redirects=False,
+                                   headers={"Accept": accept}) as response:
                 if response.status in (301, 302, 303, 307, 308):
                     location = response.headers.get("Location", "")
                     parts = urlsplit(location)
@@ -149,8 +150,24 @@ class UpdateChecker:
                     asset = next((a for a in release.get("assets", []) if a.get("name") == "linkassist-update.json"), None)
                     if not asset:
                         raise ValueError("该 Release 尚未上传 linkassist-update.json 更新清单")
-                    url = release_asset_url(asset.get("browser_download_url", ""), repo, release.get("tag_name"))
-                    manifest = await self._json(session, url, asset=True)
+                    fallback = release_asset_url(asset.get("browser_download_url", ""), repo, release.get("tag_name"))
+                    # 清单优先经 api.github.com 资产接口获取;部分网络到不了 github.com 主站
+                    try:
+                        asset_id = int(asset.get("id"))
+                    except (TypeError, ValueError):
+                        asset_id = None
+                    primary = f"https://api.github.com/repos/{repo}/releases/assets/{asset_id}" if asset_id else None
+                    manifest = None
+                    for url in ([primary] if primary else []) + [fallback]:
+                        try:
+                            manifest = await self._json(session, url, asset=True, accept="application/octet-stream")
+                            break
+                        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as network_error:
+                            if url == fallback:
+                                raise
+                            last_error = network_error
+                    if manifest is None:
+                        raise last_error
                     result = parse_release(release, manifest, repo, self.current)
                 if repo == self.settings.get("updateRepository", DEFAULT_REPOSITORY):
                     self.state.update(result)

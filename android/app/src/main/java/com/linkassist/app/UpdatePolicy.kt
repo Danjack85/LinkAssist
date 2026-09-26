@@ -27,6 +27,12 @@ internal object UpdatePolicy {
 
     fun latestApi(repo: String): String = "https://api.github.com/repos/${repository(repo)}/releases/latest"
 
+    /** Release 资产的 API 直达地址;部分网络到不了 github.com 主站但 api.github.com 可达 */
+    fun assetApiUrl(repo: String, assetId: Long): String {
+        require(assetId in 1..99_999_999_999L) { "Release 资产 ID 无效" }
+        return "https://api.github.com/repos/${repository(repo)}/releases/assets/$assetId"
+    }
+
     private fun https(raw: String): URI {
         require(raw.length in 1..8192 && raw.none { it.isWhitespace() || it.isISOControl() || it == '\\' }) {
             "更新地址无效"

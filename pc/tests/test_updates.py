@@ -104,16 +104,26 @@ def test_private_repository_is_reported_and_never_false_latest():
     asyncio.run(scenario())
 
 
-def test_valid_mock_release_check():
+def test_valid_mock_release_check_prefers_asset_api():
     async def scenario():
         checker = UpdateChecker({"autoCheckUpdates": True, "updateRepository": REPO})
         release, manifest = fixture_release()
         manifest_url = f"https://github.com/{REPO}/releases/download/{TAG}/linkassist-update.json"
-        release["assets"].append({"name": "linkassist-update.json", "browser_download_url": manifest_url})
-        async def metadata(session, url, asset=False):
+        release["assets"].append({"name": "linkassist-update.json", "id": 123456,
+                                  "browser_download_url": manifest_url})
+        calls = []
+
+        async def metadata(session, url, asset=False, accept=None):
+            calls.append((url, asset, accept))
             return manifest if asset else release
+
         checker._json = metadata
         result = await checker.check(force=True)
         assert result["status"] == "available"
         assert result["latestVersion"] == "3.1.0"
+        # 清单下载优先走 api.github.com 资产接口(github.com 主站被阻断的网络也可用)
+        assert calls[1] == (f"https://api.github.com/repos/{REPO}/releases/assets/123456",
+                            True, "application/octet-stream")
+        assert calls[0][0].endswith("/releases/latest")
+
     asyncio.run(scenario())
