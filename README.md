@@ -2,7 +2,7 @@
 
 手机 ⇄ 电脑、手机 ⇄ 手机的局域网互传助手：扫码配对、验证码转发、双向聊天、文件互传，数据不出内网，无账号无云端。
 
-> 仓库：`Danjack85/LinkAssist` · 当前版本 **3.0.2 (versionCode 14)**
+> 仓库：`Danjack85/LinkAssist` · 当前版本 **3.0.3 (versionCode 15)**
 
 ## 功能总览
 

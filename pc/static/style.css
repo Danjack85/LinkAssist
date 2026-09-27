@@ -485,3 +485,26 @@ textarea::placeholder, input::placeholder { color: #9ba8ad; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+/* 迷你面板(?mini=1):点悬浮球打开的独立小窗,只保留消息流与发送框 */
+body.mini .sidebar,
+body.mini .context-rail,
+body.mini .service-banner,
+body.mini .page-heading,
+body.mini .breadcrumb { display: none; }
+body.mini .topbar { min-height: 52px; padding: 8px 12px; gap: 8px; }
+body.mini .topbar .button.small { font-size: 11px; padding: 6px 10px; }
+body.mini .workspace-scroll { overflow: hidden; }
+body.mini .content-grid { display: flex; flex-direction: column; height: 100%; max-width: none; padding: 10px 12px 12px; gap: 0; }
+body.mini #mainContent { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+body.mini #page-messages { flex: 1; min-height: 0; }
+body.mini .messages-panel { height: 100%; display: flex; flex-direction: column; }
+body.mini .message-search { display: none; }
+body.mini .message-toolbar { padding: 12px 14px 8px; }
+body.mini .feed-wrap { flex: 1; height: auto; min-height: 0; padding: 12px 14px; }
+body.mini .composer { padding: 10px 14px 12px; }
+body.mini .composer-heading { margin-bottom: 6px; }
+body.mini textarea { min-height: 54px; max-height: 120px; }
+body.mini .desktop-titlebar { height: 30px; min-height: 30px; }
+body.mini .bubble { max-width: 95%; }
+

@@ -5,6 +5,7 @@
   const MAX_FILE = 512 * 1024 * 1024, NS = 'http://www.w3.org/2000/svg';
   const LOCAL = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
   const APP = new URLSearchParams(location.search).get('app') === '1';
+  const MINI = new URLSearchParams(location.search).get('mini') === '1';
   const views = {
     connections: ['设备连接', '连接你的设备', '一次扫码，让手机与电脑在同一局域网内互通。', 'CONNECTED WORKSPACE'],
     messages: ['消息', '接着聊，不必切换设备', '聊天、验证码与通知，在这里有序汇集。', 'MESSAGES, IN SYNC'],
@@ -20,7 +21,7 @@
   const transfers = new Map(), jobs = [], downloads = new Set(), toastTimes = new Map();
   let transferSeq = 0, transferRevision = 0, transferBusy = false, renderTimer, jobNumber = 0, queueRunning = false;
   let update = null, updateSeq = 0, updateRevision = 0, updateBusy = false, updatePollTimer;
-  let settingsDirty = false, settingsSaving = false;
+  let settingsDirty = false, settingsSaving = false, ballBusy = false;
 
   /* Small safe DOM and request helpers. All server/user strings are text nodes. */
   function el(tag, className = '', text) {
@@ -153,6 +154,48 @@
     $('#autoCheckUpdates').disabled = $('#updateRepository').disabled = settingsSaving;
     [$('#recipientSelect'), $('#recipientComposer')].forEach(s => { s.disabled = !!pendingMessage; });
     $$('[data-copying]').forEach(b => { b.disabled = true; });
+    updateBallControls();
+  }
+  /* 桌面悬浮球开关:只有桌面客户端能真正创建窗口,浏览器控制台里显示为不可用 */
+  function ballSupported() { return typeof window.pywebview?.api?.set_ball_enabled === 'function'; }
+  function updateBallControls() {
+    const box = $('#ballEnabled'); if (!box) return;
+    const supported = ballSupported();
+    box.disabled = !supported || ballBusy;
+    if (ballBusy) return;
+    $('#ballHint').textContent = supported
+      ? (box.checked ? '悬浮球已开启：点击它打开迷你面板，右键打开主窗口。' : '开启后屏幕上出现圆形悬浮球，可随时关闭。')
+      : '仅在电脑桌面客户端中可用；浏览器控制台没有悬浮球。';
+  }
+  async function toggleBall(event) {
+    const box = event.target, wanted = box.checked;
+    if (!ballSupported()) { box.checked = false; return updateBallControls(); }
+    ballBusy = true; updateBallControls();
+    try {
+      await api('/api/settings', post({ ballEnabled: wanted }));
+      const applied = await window.pywebview.api.set_ball_enabled(wanted);
+      if (applied !== wanted) throw new Error(wanted ? '系统未能创建悬浮球窗口' : '系统未能关闭悬浮球');
+      cfg = { ...cfg, ballEnabled: wanted };
+      toast(wanted ? '桌面悬浮球已开启' : '桌面悬浮球已关闭');
+    } catch (error) {
+      box.checked = !wanted;
+      toast('悬浮球设置失败：' + error.message, true);
+    } finally { ballBusy = false; updateBallControls(); }
+  }
+  /* 迷你面板:独立小窗只保留消息流与发送框 */
+  function applyMiniMode() {
+    document.body.classList.add('mini');
+    document.title = 'LinkAssist · 迷你面板';
+    const label = $('#desktopTitlebar .titlebar-label span'); if (label) label.textContent = 'LinkAssist · 迷你面板';
+    const toMain = $('#btnCollapse'); toMain.title = '打开主程序'; toMain.setAttribute('aria-label', '打开主程序');
+    toMain.querySelector('use')?.setAttribute('href', '#i-external');
+    toMain.onclick = () => nativeCall('show_main', '此操作仅在桌面客户端中可用。');
+    const closeMini = $('#btnQuit'); closeMini.title = '关闭迷你面板'; closeMini.setAttribute('aria-label', '关闭迷你面板');
+    closeMini.onclick = () => nativeCall('close_mini', '此操作仅在桌面客户端中可用。');
+    const quick = $('#btnQuickPair'); quick.title = '打开主程序';
+    quick.replaceChildren(icon('external'), el('span', '', '主程序'));
+    quick.onclick = () => nativeCall('show_main', '此操作仅在桌面客户端中可用。');
+    navigate('messages', false);
   }
 
   /* Pairing codes are local server SVG images, never inserted as markup. */
@@ -420,6 +463,7 @@
     if (settingsDirty || settingsSaving) return;
     if (typeof source?.autoCheckUpdates === 'boolean') $('#autoCheckUpdates').checked = source.autoCheckUpdates;
     else if (typeof source?.enabled === 'boolean') $('#autoCheckUpdates').checked = source.enabled;
+    if (typeof source?.ballEnabled === 'boolean' && !ballBusy) $('#ballEnabled').checked = source.ballEnabled;
     const repository = source?.updateRepository ?? source?.repository; if (typeof repository === 'string') $('#updateRepository').value = repository;
   }
   function applyUpdate(data) {
@@ -474,7 +518,7 @@
     if (data.type === 'init') {
       cfg = data.config || {}; initialized = true; channel = 'online'; pairRetryAt = 0; clearTimeout(handshakeTimer); reconnectDelay = 1000; reconnectAt = 0;
       messages = Array.isArray(data.messages) ? data.messages.filter(m => m && typeof m === 'object').slice(-500) : []; messageRevision++; roster(data.deviceInfos); fillSettings(cfg); syncMessages();
-      if (firstInit) { if (!userNavigated) navigate(devices.length ? 'messages' : 'connections', false); firstInit = false; }
+      if (firstInit) { if (!userNavigated) navigate(MINI || devices.length ? 'messages' : 'connections', false); firstInit = false; }
       if (data.update) applyUpdate(data.update); loadPair(); loadTransfers(); loadUpdates();
     } else if (data.type === 'status') roster(data.deviceInfos);
     else if (data.type === 'config') { cfg = data.config || cfg; manualInfo(); fillSettings(cfg); controls(); }
@@ -536,6 +580,8 @@
   [$('#autoCheckUpdates'), $('#updateRepository')].forEach(input => input.addEventListener('input', () => { settingsDirty = true; $('#settingsHint').textContent = '有尚未保存的修改。'; controls(); }));
   $('#desktopTitlebar').hidden = !APP; $('#btnCollapse').onclick = () => nativeCall('toggle_panel', '此操作仅在桌面客户端中可用。');
   $('#btnQuit').onclick = () => { if (confirm('退出互传助手？进行中的传输将中断，未发送的草稿将丢失。')) nativeCall('quit_app', '浏览器模式请直接关闭当前标签页。'); };
+  $('#ballEnabled').onchange = toggleBall;
+  if (MINI) applyMiniMode();
   window.addEventListener('online', () => { if (!ready()) connect(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickPair(); if (ready() && update?.status === 'checking') loadUpdates(); } });
   window.addEventListener('beforeunload', event => { if (jobs.some(j => activeStatus(j.status)) || pendingMessage) { event.preventDefault(); event.returnValue = ''; } });

@@ -120,6 +120,7 @@ def load_config():
     cfg.setdefault("auto_open", True)
     cfg.setdefault("autoCheckUpdates", True)
     cfg.setdefault("updateRepository", DEFAULT_REPOSITORY)
+    cfg.setdefault("ballEnabled", False)   # 桌面悬浮球默认关闭,可在控制台设置中开启
     if not os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "x", encoding="utf-8") as f:
@@ -385,6 +386,10 @@ async def api_settings(request):
             if type(data["autoCheckUpdates"]) is not bool:
                 raise ValueError("自动检查开关必须是布尔值")
             changes["autoCheckUpdates"] = data["autoCheckUpdates"]
+        if "ballEnabled" in data:
+            if type(data["ballEnabled"]) is not bool:
+                raise ValueError("悬浮球开关必须是布尔值")
+            changes["ballEnabled"] = data["ballEnabled"]
         updated = dict(CFG, **changes)
         save_config(updated)
         repository_changed = updated.get("updateRepository") != CFG.get("updateRepository")
@@ -395,7 +400,8 @@ async def api_settings(request):
                                  releaseUrl="", downloadUrl="", notes="", latestVersion="", sha256="", size=0)
         await checker._publish()
         return web.json_response({"autoCheckUpdates": CFG.get("autoCheckUpdates", True),
-                                  "updateRepository": CFG.get("updateRepository", DEFAULT_REPOSITORY)})
+                                  "updateRepository": CFG.get("updateRepository", DEFAULT_REPOSITORY),
+                                  "ballEnabled": bool(CFG.get("ballEnabled", False))})
     except (ValueError, TypeError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except OSError:
@@ -811,7 +817,9 @@ async def ws_ui(request):
                 "connected": bool(STATE["devices"]),
                 "devices": [d["name"] for d in STATE["devices"].values()],
                 "deviceInfos": list(STATE["devices"].values()),
-                "config": {"addr": LAN_IP, "port": CFG["port"], "token": CFG["token"], "name": CFG["name"]},
+                "config": {"addr": LAN_IP, "port": CFG["port"], "token": CFG["token"], "name": CFG["name"],
+                           "ballEnabled": bool(CFG.get("ballEnabled", False)),
+                           "updateRepository": CFG.get("updateRepository", DEFAULT_REPOSITORY)},
                 "transports": {"lan": {"available": True, "protocol": "websocket+http"},
                                "bluetooth": {"available": False, "reason": "planned"}},
                 "messages": STATE["messages"][-300:]}

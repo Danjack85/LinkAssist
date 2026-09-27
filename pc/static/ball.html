@@ -5,25 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LinkAssist · 悬浮球</title>
   <style>
+    /* 窗口本身被裁成圆形(由桌面端 SetWindowRgn 完成),这里让球体铺满整窗,避免露出方形底色 */
     :root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color-scheme: light; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
-    #ball { position: fixed; left: 6px; top: 6px; width: 64px; height: 64px; padding: 0; border-radius: 50%; border: 2px solid #56b7a6; background: #223a39; color: #b8eee2; box-shadow: 0 3px 8px rgb(20 45 40 / 24%); display: grid; place-items: center; cursor: grab; transition: border-color .2s, background .2s; }
-    #ball.off { background: #273238; color: #9eb2b9; border-color: #61747b; }
-    #ball:hover { border-color: #85d4c3; background: #2b4743; }
-    #ball:active { cursor: grabbing; }
-    #ball:focus-visible { outline: 2px solid #d7fff3; outline-offset: 2px; }
-    .mark { width: 31px; height: 31px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-    #status { position: absolute; right: 5px; bottom: 5px; width: 11px; height: 11px; border-radius: 50%; background: #24be9e; border: 2px solid #223a39; pointer-events: none; }
-    #ball.off #status { background: #899da5; border-color: #273238; }
-    #badge { position: absolute; top: -4px; right: -4px; min-width: 21px; height: 21px; padding: 0 5px; border: 2px solid #f5faf8; border-radius: 12px; background: #087d6b; color: #fff; font-size: 10px; font-weight: 650; line-height: 17px; text-align: center; pointer-events: none; }
+    html, body { margin: 0; padding: 0; height: 100%; background: #243f3c; overflow: hidden; user-select: none; }
+    #ball {
+      position: fixed; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 50%;
+      background: radial-gradient(circle at 32% 26%, #35605a, #1e3b38 70%);
+      color: #bdf0e4; display: grid; place-items: center; cursor: pointer;
+      box-shadow: inset 0 0 0 2px rgba(133, 212, 195, .55);
+      transition: background .18s, color .18s, box-shadow .18s;
+    }
+    #ball.off { background: radial-gradient(circle at 32% 26%, #3d4f55, #22302f 72%); color: #a9bcc0; box-shadow: inset 0 0 0 2px rgba(150, 170, 178, .38); }
+    #ball:hover { background: radial-gradient(circle at 32% 26%, #3f736a, #234540 70%); color: #d9fff5; }
+    #ball:active { background: radial-gradient(circle at 32% 26%, #2c5a52, #1a3431 70%); }
+    #ball:focus-visible { box-shadow: inset 0 0 0 3px #d7fff3; }
+    .mark { width: 42%; height: 42%; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+    #status { position: absolute; right: 16%; bottom: 16%; width: 15%; height: 15%; max-width: 13px; max-height: 13px; min-width: 9px; min-height: 9px; border-radius: 50%; background: #2cd3aa; border: 2px solid #1e3b38; pointer-events: none; }
+    #ball.off #status { background: #8fa3ab; border-color: #22302f; }
+    #badge { position: absolute; top: 11%; right: 11%; min-width: 19px; height: 19px; padding: 0 4px; border-radius: 10px; background: #0b8f78; color: #fff; font-size: 10px; font-weight: 700; line-height: 19px; text-align: center; pointer-events: none; box-shadow: 0 1px 4px rgb(8 40 34 / 45%); }
     [hidden] { display: none !important; }
-    #ball.unread { border-color: #a2ead4; }
+    #ball.unread { box-shadow: inset 0 0 0 3px #a2ead4; }
     @media (prefers-reduced-motion: reduce) { #ball { transition: none; } }
   </style>
 </head>
 <body>
-  <button id="ball" class="off pywebview-drag-region" type="button" aria-label="打开互传助手，正在连接本机服务" title="互传助手 · 正在连接本机服务。点击展开，拖动移动，右键退出。">
+  <button id="ball" class="off pywebview-drag-region" type="button" aria-label="打开迷你面板，正在连接本机服务" title="互传助手 · 正在连接本机服务。点击打开迷你面板，拖动移动，右键打开主窗口。">
     <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 7-1 1a4.25 4.25 0 0 1-6-6l4-4a4.25 4.25 0 0 1 6 0m2 1 1-1a4.25 4.25 0 0 1 6 6l-4 4a4.25 4.25 0 0 1-6 0" transform="translate(1 0)"/></svg>
     <span id="status" aria-hidden="true"></span><span id="badge" hidden aria-hidden="true"></span>
   </button>
@@ -36,8 +43,8 @@
       const state = !service ? '本机服务未连接' : online ? '设备已连接' : '等待设备连接';
       ball.classList.toggle('off', !service || !online); ball.classList.toggle('unread', unread > 0);
       badge.hidden = unread === 0; badge.textContent = unread > 99 ? '99+' : String(unread);
-      ball.setAttribute('aria-label', `打开互传助手，${state}${unread ? `，${unread} 条未读消息` : ''}`);
-      ball.title = extra || `互传助手 · ${state}${unread ? ` · ${unread} 条未读` : ''}。点击展开，拖动移动，右键退出。`;
+      ball.setAttribute('aria-label', `打开迷你面板，${state}${unread ? `，${unread} 条未读消息` : ''}`);
+      ball.title = extra || `互传助手 · ${state}${unread ? ` · ${unread} 条未读` : ''}。点击打开迷你面板，拖动移动，右键打开主窗口。`;
     }
     function reconnect() {
       service = false; online = false; describe(); clearTimeout(retryTimer);
@@ -61,28 +68,30 @@
       };
       ws.onerror = () => ws.close(); ws.onclose = () => { if (socket === ws) { clearTimeout(handshake); reconnect(); } };
     }
-    async function toggle() {
+    /* 左键:打开独立迷你面板(不展开主窗口);右键:打开主窗口 */
+    async function openMini() {
       if (busy) return; const api = window.pywebview?.api;
-      if (!api?.toggle_panel) return describe('桌面桥接尚未就绪，请稍后再点击。');
+      if (!api?.open_mini) return describe('桌面桥接尚未就绪，请稍后再点击。');
       busy = true;
-      try { if (await api.toggle_panel()) unread = 0; describe(); }
-      catch (_) { describe('暂时无法展开面板，请重试。'); }
+      try { if (await api.open_mini()) unread = 0; else describe('迷你面板打开失败，可右键打开主窗口。'); describe(); }
+      catch (_) { describe('暂时无法打开迷你面板，请右键打开主窗口。'); }
       finally { busy = false; }
+    }
+    async function openMain() {
+      const api = window.pywebview?.api;
+      if (!api?.show_main) return describe('桌面桥接尚未就绪，请稍后再点击。');
+      try { await api.show_main(); unread = 0; describe('已打开主窗口。'); }
+      catch (_) { describe('暂时无法打开主窗口，请从系统托盘恢复。'); }
     }
     ball.addEventListener('mousedown', event => { if (event.button === 0) { start = [event.screenX, event.screenY]; moved = false; } });
     window.addEventListener('mousemove', event => {
       if (!start || moved || !(event.buttons & 1)) return;
-      if (Math.hypot(event.screenX - start[0], event.screenY - start[1]) > 6) { moved = true; try { window.pywebview?.drag?.(); } catch (_) {} }
+      if (Math.hypot(event.screenX - start[0], event.screenY - start[1]) > 6) { moved = true; }
     });
     window.addEventListener('mouseup', () => { start = null; });
     window.addEventListener('blur', () => { start = null; });
-    ball.addEventListener('click', event => { if (event.detail === 0 || !moved) toggle(); moved = false; });
-    ball.addEventListener('contextmenu', async event => {
-      event.preventDefault(); const api = window.pywebview?.api;
-      if (!api?.quit_app) return describe('退出功能仅在桌面客户端中可用。');
-      if (!confirm('退出互传助手？进行中的文件传输将中断。')) return;
-      try { await api.quit_app(); } catch (_) { describe('未能退出，请从桌面主面板重试。'); }
-    });
+    ball.addEventListener('click', event => { if (event.detail === 0 || !moved) openMini(); moved = false; });
+    ball.addEventListener('contextmenu', event => { event.preventDefault(); openMain(); });
     connect();
   </script>
 </body>
