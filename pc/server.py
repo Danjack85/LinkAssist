@@ -97,6 +97,8 @@ TRANSFER_TOKENS = {}
 PAIRING = PairingInvitations()
 UPDATE_CHECKER_KEY = web.AppKey("update_checker", UpdateChecker)
 ACTIVE_UPLOADS = set()
+# 桌面端注册"把主窗口带到前台"的回调;第二次启动 exe 时经本机接口唤回已有窗口
+SHOW_WINDOW = None
 
 
 # ---------------------------------------------------------------- 配置
@@ -121,6 +123,7 @@ def load_config():
     cfg.setdefault("autoCheckUpdates", True)
     cfg.setdefault("updateRepository", DEFAULT_REPOSITORY)
     cfg.setdefault("ballEnabled", False)   # 桌面悬浮球默认关闭,可在控制台设置中开启
+    cfg.setdefault("closeToTray", True)    # 点关闭按钮默认收进托盘后台继续运行
     if not os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "x", encoding="utf-8") as f:
@@ -291,6 +294,7 @@ def save_config(cfg):
 CONSOLE_PATHS = {
     "/", "/ball", "/ws", "/api/status", "/api/messages", "/api/send", "/api/clear",
     "/api/pairing", "/api/pairing/refresh", "/api/updates", "/api/updates/check", "/api/settings",
+    "/api/show",
 }
 
 
@@ -374,6 +378,18 @@ async def api_updates(request):
     return web.json_response(await checker.check(force=True) if request.method == "POST" else checker.snapshot())
 
 
+async def api_show(request):
+    """第二次启动 exe 时唤回已有主窗口(仅本机可调用,由控制台访问限制保护)"""
+    callback = SHOW_WINDOW
+    if callback is None:
+        return web.json_response({"error": "此版本没有可唤出的桌面窗口"}, status=409)
+    try:
+        await asyncio.to_thread(callback)
+    except Exception as exc:
+        return web.json_response({"error": str(exc)[:160]}, status=500)
+    return web.json_response({"ok": True})
+
+
 async def api_settings(request):
     try:
         data = await request.json()
@@ -390,6 +406,10 @@ async def api_settings(request):
             if type(data["ballEnabled"]) is not bool:
                 raise ValueError("悬浮球开关必须是布尔值")
             changes["ballEnabled"] = data["ballEnabled"]
+        if "closeToTray" in data:
+            if type(data["closeToTray"]) is not bool:
+                raise ValueError("关闭行为开关必须是布尔值")
+            changes["closeToTray"] = data["closeToTray"]
         updated = dict(CFG, **changes)
         save_config(updated)
         repository_changed = updated.get("updateRepository") != CFG.get("updateRepository")
@@ -401,7 +421,8 @@ async def api_settings(request):
         await checker._publish()
         return web.json_response({"autoCheckUpdates": CFG.get("autoCheckUpdates", True),
                                   "updateRepository": CFG.get("updateRepository", DEFAULT_REPOSITORY),
-                                  "ballEnabled": bool(CFG.get("ballEnabled", False))})
+                                  "ballEnabled": bool(CFG.get("ballEnabled", False)),
+                                  "closeToTray": bool(CFG.get("closeToTray", True))})
     except (ValueError, TypeError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except OSError:
@@ -819,6 +840,7 @@ async def ws_ui(request):
                 "deviceInfos": list(STATE["devices"].values()),
                 "config": {"addr": LAN_IP, "port": CFG["port"], "token": CFG["token"], "name": CFG["name"],
                            "ballEnabled": bool(CFG.get("ballEnabled", False)),
+                           "closeToTray": bool(CFG.get("closeToTray", True)),
                            "updateRepository": CFG.get("updateRepository", DEFAULT_REPOSITORY)},
                 "transports": {"lan": {"available": True, "protocol": "websocket+http"},
                                "bluetooth": {"available": False, "reason": "planned"}},
@@ -912,6 +934,7 @@ def create_app(auto_updates=True) -> web.Application:
     app.router.add_get("/api/updates", api_updates)
     app.router.add_post("/api/updates/check", api_updates)
     app.router.add_post("/api/settings", api_settings)
+    app.router.add_post("/api/show", api_show)
     app.router.add_get("/api/messages", api_messages)
     app.router.add_get("/api/history", api_history)
     app.router.add_post("/api/clear", api_clear)

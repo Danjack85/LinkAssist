@@ -7,7 +7,7 @@ from urllib.parse import unquote, urlsplit
 
 import aiohttp
 
-VERSION = "3.0.3"
+VERSION = "3.0.4"
 DEFAULT_REPOSITORY = "Danjack85/LinkAssist"
 CHECK_INTERVAL = 12 * 60 * 60
 METADATA_LIMIT = 1024 * 1024

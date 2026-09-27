@@ -10,6 +10,7 @@
 打包 exe: build.bat (PyInstaller)
 """
 import ctypes
+import json
 import os
 import socket
 import sys
@@ -144,6 +145,32 @@ def stop_tray():
             pass
 
 
+def _notify_tray(message, title="互传助手 LinkAssist"):
+    """托盘气泡提醒(不支持时静默跳过)"""
+    t = _tray
+    if t is None:
+        return
+    try:
+        t.notify(message, title)
+    except Exception:
+        pass
+
+
+def _hide_to_tray(announce=True):
+    """把主窗口收进托盘,服务与手机连接继续在后台运行"""
+    w = panel_win
+    if w is None:
+        return False
+    try:
+        w.hide()
+    except Exception:
+        return False
+    Api.panel_visible = False
+    if announce:
+        _notify_tray("互传助手仍在后台运行，手机连接与文件传输不受影响。\n双击托盘图标可重新打开主窗口，右键可退出。")
+    return True
+
+
 class Api:
     """暴露给页面 JS 的接口 (window.pywebview.api.*)"""
     panel_visible = True
@@ -160,6 +187,25 @@ class Api:
             w.show()
             Api.panel_visible = True
         return Api.panel_visible
+
+    def request_close(self):
+        """标题栏"关闭"按钮:按设置最小化到托盘或真正退出。
+
+        返回 "hidden"(已收进托盘) 或 "quit"(已退出),供界面提示。
+        """
+        if not bool(srv.CFG.get("closeToTray", True)):
+            self.quit_app()
+            return "quit"
+        return "hidden" if _hide_to_tray() else "error"
+
+    def hide_to_tray(self):
+        """最小化到托盘(标题栏 — 按钮)"""
+        return _hide_to_tray()
+
+    def quit_app_confirm(self):
+        """设置页里的"退出程序"(界面已二次确认)"""
+        self.quit_app()
+        return "quit"
 
     def show_main(self):
         """把主窗口带到前台(迷你面板里的"打开主程序")"""
@@ -228,6 +274,7 @@ class Api:
         return webbrowser.open(url)
 
     def quit_app(self):
+        _remove_pid_file()
         stop_tray()
         try:
             for w in list(webview.windows):
@@ -389,15 +436,76 @@ def wait_backend(port: int, timeout: float = 15.0):
     return False
 
 
+# ---------------------------------------------------------------- 单实例(后台运行支持)
+def _pid_file_path():
+    return os.path.join(srv.BASE, "linkassist.pid")
+
+
+def _existing_instance_port():
+    """已在后台运行(窗口收进了托盘)时返回它的端口,否则 None。
+
+    重新双击 exe 不应开出第二个实例;直接唤回正在后台运行的窗口。
+    """
+    try:
+        path = _pid_file_path()
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as fh:
+            info = json.load(fh)
+        port = int(info.get("port", 0))
+        if port < 1 or port > 65535:
+            return None
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=1.5) as resp:
+            if resp.status != 200:
+                return None
+        return port
+    except Exception:
+        return None
+
+
+def _write_pid_file(port):
+    try:
+        with open(_pid_file_path(), "w", encoding="utf-8") as fh:
+            json.dump({"pid": os.getpid(), "port": port}, fh)
+    except OSError:
+        pass
+
+
+def _remove_pid_file():
+    try:
+        os.remove(_pid_file_path())
+    except OSError:
+        pass
+
+
+def _wake_existing_instance(port) -> bool:
+    """请求已有实例显示主窗口;成功则本进程退出"""
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/api/show", data=b"{}", method="POST",
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=3) as resp:
+            return resp.status == 200
+    except Exception as exc:
+        srv.log("[单实例] 唤回已有窗口失败:", exc)
+        return False
+
+
 def main():
     global panel_win, PORT
     srv.CFG = srv.load_config()
+    # 单实例:已在后台运行时,唤回已有窗口后本进程直接退出(不重复起服务)
+    existing = _existing_instance_port()
+    if existing and _wake_existing_instance(existing):
+        srv.log(f"[单实例] 互传助手已在后台运行(端口 {existing}),已唤回主窗口,本次启动退出。")
+        sys.exit(0)
     srv.load_history()
     srv.load_transfers()
     port = pick_port(int(srv.CFG["port"]))
     srv.CFG["port"] = port
     PORT = port
     # 实际端口通过 UDP 发现(37777)对外公布,手机端连接失败时会自动跟随,无需写回配置
+    _write_pid_file(port)
+    srv.SHOW_WINDOW = api.show_main
 
     threading.Thread(target=start_backend, args=(port,), daemon=True).start()
     if not wait_backend(port):
@@ -413,6 +521,22 @@ def main():
         frameless=True, on_top=False,
         background_color="#F5F7F9",
     )
+
+    def _on_panel_closing():
+        """窗口关闭拦截:默认收进托盘继续在后台运行,避免误关导致手机断连。
+
+        返回 False 取消关闭;设置里关掉"关闭时最小化到托盘"才真正退出。
+        """
+        if bool(srv.CFG.get("closeToTray", True)):
+            _hide_to_tray()
+            return False
+        threading.Thread(target=api.quit_app, daemon=True).start()
+        return True
+
+    try:
+        panel_win.events.closing += _on_panel_closing
+    except Exception as exc:
+        srv.log("[托盘] 关闭拦截注册失败:", exc)
     # 悬浮球仅在设置里开启后出现(默认关闭,避免打扰)
     if srv.CFG.get("ballEnabled"):
         set_ball_enabled(True)

@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="light">
   <title>互传助手 · LinkAssist</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/static/style.css?v=6">
-  <script src="/static/app.js?v=6" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=7">
+  <script src="/static/app.js?v=7" defer></script>
 </head>
 <body>
   <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
@@ -42,8 +42,8 @@
   <a class="skip-link" href="#mainContent">跳到主内容</a>
   <div class="desktop-titlebar" id="desktopTitlebar" hidden>
     <div class="titlebar-label pywebview-drag-region"><svg class="icon"><use href="#i-link"/></svg><span>LinkAssist · 互传助手</span></div>
-    <button class="window-button" id="btnCollapse" type="button" title="收起到悬浮球" aria-label="收起到悬浮球"><svg class="icon"><use href="#i-minus"/></svg></button>
-    <button class="window-button window-close" id="btnQuit" type="button" title="退出互传助手" aria-label="退出互传助手"><svg class="icon"><use href="#i-close"/></svg></button>
+    <button class="window-button" id="btnCollapse" type="button" title="最小化到托盘（后台运行）" aria-label="最小化到托盘"><svg class="icon"><use href="#i-minus"/></svg></button>
+    <button class="window-button window-close" id="btnQuit" type="button" title="关闭（按设置收进托盘或退出）" aria-label="关闭窗口"><svg class="icon"><use href="#i-close"/></svg></button>
   </div>
 
   <div class="app-shell">
@@ -148,7 +148,7 @@
             <section class="page" id="page-settings" aria-labelledby="pageTitle" hidden>
               <article class="panel settings-panel"><header class="panel-heading"><h2>版本与更新</h2><span class="badge neutral" id="updateStatus">尚未获取</span></header><div class="version-grid"><div><span>当前版本</span><strong id="currentVersion">—</strong></div><div><span>最新发布</span><strong id="latestVersion">尚未获取</strong></div></div><p class="update-message" id="updateMessage" role="status">连接本机服务后读取更新信息。</p><div class="update-actions"><button class="button secondary" id="btnCheckUpdates" type="button" disabled><svg class="icon"><use href="#i-refresh"/></svg>检查更新</button><button class="button primary" id="btnDownloadUpdate" type="button" hidden><svg class="icon"><use href="#i-external"/></svg>前往 GitHub 下载</button></div><p class="field-help" id="updateCheckedAt">尚未检查</p><details class="release-details" id="releaseDetails" hidden><summary>版本说明与校验信息<svg class="icon chevron"><use href="#i-chevron"/></svg></summary><pre id="releaseNotes" class="release-notes"></pre><dl class="release-meta"><div><dt>安装包大小</dt><dd id="updateSize">未提供</dd></div><div><dt>SHA-256</dt><dd><code id="updateSha">未提供</code></dd></div></dl></details></article>
               <form class="panel settings-panel" id="updateSettings"><header class="panel-heading"><h2>更新偏好</h2></header><label class="checkbox-field"><input id="autoCheckUpdates" type="checkbox"><span><strong>自动检查更新</strong><small>仅检查新版本，不自动下载或安装。</small></span></label><label class="field-label" for="updateRepository">GitHub 更新来源</label><input class="text-input" id="updateRepository" placeholder="owner/repo" maxlength="140" spellcheck="false" autocomplete="off" aria-describedby="repositoryHint"><p class="field-help" id="repositoryHint">填写仓库名 owner/repo。私有仓库或未发布 Release 时会显示实际检查结果。</p><div class="settings-save"><span class="field-help" id="settingsHint" role="status">偏好保存在本机。</span><button class="button primary" id="btnSaveSettings" type="submit" disabled>保存设置</button></div></form>
-              <article class="panel settings-panel" id="desktopPanel"><header class="panel-heading"><h2>桌面体验</h2></header><label class="checkbox-field"><input id="ballEnabled" type="checkbox"><span><strong>显示桌面悬浮球</strong><small>圆形置顶小球：点击打开迷你面板，右键打开主窗口；关闭后只保留主窗口与系统托盘。</small></span></label><p class="field-help" id="ballHint">仅在电脑桌面客户端中可用。</p></article>
+              <article class="panel settings-panel" id="desktopPanel"><header class="panel-heading"><h2>桌面体验</h2></header><label class="checkbox-field"><input id="ballEnabled" type="checkbox"><span><strong>显示桌面悬浮球</strong><small>圆形置顶小球：点击打开迷你面板，右键打开主窗口；关闭后只保留主窗口与托盘。</small></span></label><label class="checkbox-field"><input id="closeToTray" type="checkbox"><span><strong>关闭窗口时最小化到托盘</strong><small>后台继续运行：手机连接、消息与文件传输不受影响。取消勾选后，点 ✕ 将直接退出程序。</small></span></label><p class="field-help" id="ballHint">仅在电脑桌面客户端中可用。</p><div class="settings-save"><span class="field-help" id="trayHint" role="status">托盘图标常驻：双击显示主窗口，右键可打开迷你面板或退出。</span><button class="button ghost small" id="btnQuitApp" type="button">退出程序</button></div></article>
               <div class="settings-footnote"><svg class="icon"><use href="#i-shield"/></svg><p>更新检查不影响当前传输。下载由你确认并在 GitHub 完成，互传助手不会自动安装。</p></div>
             </section>
           </main>

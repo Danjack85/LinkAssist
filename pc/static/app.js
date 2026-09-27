@@ -162,6 +162,8 @@
     const box = $('#ballEnabled'); if (!box) return;
     const supported = ballSupported();
     box.disabled = !supported || ballBusy;
+    const tray = $('#closeToTray'); if (tray) tray.disabled = !supported;
+    const quitBtn = $('#btnQuitApp'); if (quitBtn) quitBtn.disabled = !supported;
     if (ballBusy) return;
     $('#ballHint').textContent = supported
       ? (box.checked ? '悬浮球已开启：点击它打开迷你面板，右键打开主窗口。' : '开启后屏幕上出现圆形悬浮球，可随时关闭。')
@@ -181,6 +183,33 @@
       box.checked = !wanted;
       toast('悬浮球设置失败：' + error.message, true);
     } finally { ballBusy = false; updateBallControls(); }
+  }
+  /* 关闭行为:收进托盘(后台继续) 还是 直接退出 */
+  async function toggleCloseToTray(event) {
+    const box = event.target, wanted = box.checked;
+    if (!ballSupported()) { box.checked = true; return updateBallControls(); }
+    box.disabled = true;
+    try {
+      await api('/api/settings', post({ closeToTray: wanted }));
+      cfg = { ...cfg, closeToTray: wanted };
+      toast(wanted ? '关闭窗口后将收进托盘，后台继续运行' : '关闭窗口将直接退出程序');
+    } catch (error) {
+      box.checked = !wanted;
+      toast('设置失败：' + error.message, true);
+    } finally { box.disabled = false; updateBallControls(); }
+  }
+  async function hideToTray() {
+    if (!ballSupported()) return toast('此操作仅在桌面客户端中可用。', true);
+    try { await window.pywebview.api.hide_to_tray(); toast('已最小化到托盘，后台继续运行'); }
+    catch (_) { toast('最小化失败，请从系统托盘操作。', true); }
+  }
+  async function requestClose() {
+    if (!ballSupported()) { if (confirm('关闭当前页面？后台服务仍在运行。')) window.close(); return; }
+    try {
+      const result = await window.pywebview.api.request_close();
+      if (result === 'hidden') toast('已收进托盘，手机连接与传输不受影响');
+      else if (result === 'error') toast('未能收进托盘，请使用系统托盘退出。', true);
+    } catch (_) { toast('关闭操作未完成，请重试。', true); }
   }
   /* 迷你面板:独立小窗只保留消息流与发送框 */
   function applyMiniMode() {
@@ -464,6 +493,7 @@
     if (typeof source?.autoCheckUpdates === 'boolean') $('#autoCheckUpdates').checked = source.autoCheckUpdates;
     else if (typeof source?.enabled === 'boolean') $('#autoCheckUpdates').checked = source.enabled;
     if (typeof source?.ballEnabled === 'boolean' && !ballBusy) $('#ballEnabled').checked = source.ballEnabled;
+    if (typeof source?.closeToTray === 'boolean') $('#closeToTray').checked = source.closeToTray;
     const repository = source?.updateRepository ?? source?.repository; if (typeof repository === 'string') $('#updateRepository').value = repository;
   }
   function applyUpdate(data) {
@@ -578,9 +608,11 @@
   $('#btnFolder').onclick = () => nativeCall('open_received_folder', '浏览器模式无法打开本机文件夹，请在桌面客户端使用“接收文件夹”。');
   $('#btnCheckUpdates').onclick = () => loadUpdates(true); $('#btnDownloadUpdate').onclick = openUpdate; $('#updateSettings').onsubmit = saveSettings;
   [$('#autoCheckUpdates'), $('#updateRepository')].forEach(input => input.addEventListener('input', () => { settingsDirty = true; $('#settingsHint').textContent = '有尚未保存的修改。'; controls(); }));
-  $('#desktopTitlebar').hidden = !APP; $('#btnCollapse').onclick = () => nativeCall('toggle_panel', '此操作仅在桌面客户端中可用。');
-  $('#btnQuit').onclick = () => { if (confirm('退出互传助手？进行中的传输将中断，未发送的草稿将丢失。')) nativeCall('quit_app', '浏览器模式请直接关闭当前标签页。'); };
+  $('#desktopTitlebar').hidden = !APP; $('#btnCollapse').onclick = () => hideToTray();
+  $('#btnQuit').onclick = () => requestClose();
+  $('#btnQuitApp').onclick = () => { if (confirm('退出互传助手？后台服务将停止，手机将断开连接；未发送的草稿会丢失。')) nativeCall('quit_app_confirm', '浏览器模式请直接关闭当前标签页。'); };
   $('#ballEnabled').onchange = toggleBall;
+  $('#closeToTray').onchange = toggleCloseToTray;
   if (MINI) applyMiniMode();
   window.addEventListener('online', () => { if (!ready()) connect(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { tickPair(); if (ready() && update?.status === 'checking') loadUpdates(); } });
