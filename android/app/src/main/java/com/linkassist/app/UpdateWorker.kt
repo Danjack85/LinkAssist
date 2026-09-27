@@ -37,7 +37,8 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             val (remote, reached, _) = Updater.checkAll(context)
             if (Prefs.autoCheckUpdates(context) && reached && remote != null &&
                 remote.versionCode > BuildConfig.VERSION_CODE &&
-                remote.versionCode > Prefs.lastNotifiedUpdateVersionCode(context)) {
+                remote.versionCode > Prefs.lastNotifiedUpdateVersionCode(context) &&
+                remote.versionName != Prefs.skippedUpdateVersion(context)) {
                 if (notifyUpdate(context, remote)) {
                     Prefs.setLastNotifiedUpdateVersionCode(context, remote.versionCode)
                 }
@@ -106,14 +107,14 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             val pending = PendingIntent.getActivity(
                 context, NOTIFICATION_ID,
                 Intent(context, MainActivity::class.java)
-                    .putExtra("open_settings", true)
+                    .putExtra("open_update", true)
                     .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val notification = NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle("LinkAssist v${remote.versionName} 可更新")
-                .setContentText("点击进入设置查看更新；仅提醒，不会自动下载或安装")
+                .setContentText("点击打开应用查看更新说明并一键升级；仅提醒，不会自动安装")
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)

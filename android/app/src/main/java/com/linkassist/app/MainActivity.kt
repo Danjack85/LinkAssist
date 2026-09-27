@@ -162,6 +162,7 @@ private val Red = Color(0xFFFF9A95)
 
 class MainActivity : ComponentActivity() {
     private var settingsRequest by mutableStateOf(0)
+    private var updateRequest by mutableStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -171,21 +172,23 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         if (intent.getBooleanExtra("open_settings", false)) settingsRequest++
+        if (intent.getBooleanExtra("open_update", false)) updateRequest++
         // Runtime permissions are requested only after an explicit action in Scan or Settings.
         UpdateWorker.schedule(this, checkAtStartup = savedInstanceState == null)
-        setContent { App(settingsRequest) }
+        setContent { App(settingsRequest, updateRequest) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra("open_settings", false)) settingsRequest++
+        if (intent.getBooleanExtra("open_update", false)) updateRequest++
     }
 }
 
 // ============================================================ 主框架:底部导航
 @Composable
-fun App(settingsRequest: Int = 0) {
+fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Bg, surface = CardBg, primary = Accent, onPrimary = CodeBg,
@@ -218,6 +221,19 @@ fun App(settingsRequest: Int = 0) {
         var hubOn by remember { mutableStateOf(LinkService.hubRunning) }
         var hubPeers by remember { mutableStateOf(LinkService.hubPeerCount) }
         var fileTick by remember { mutableStateOf(0) }
+
+        // 打开应用自动检查更新(60 秒防抖):发现新版本弹出应用内更新弹窗
+        LaunchedEffect(Unit) {
+            delay(2000)
+            UpdateFlow.autoCheckOnOpen(ctx)
+        }
+        // 点击更新通知进入:立即检查并弹出更新弹窗
+        LaunchedEffect(updateRequest) {
+            if (updateRequest > 0) {
+                tab = 3
+                UpdateFlow.checkFromNotification(ctx)
+            }
+        }
 
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty()) {
@@ -425,7 +441,54 @@ fun App(settingsRequest: Int = 0) {
 
         if (showProfileEdit != null) ProfileDialog(initial = showProfileEdit, onClose = { showProfileEdit = null })
         if (showProfileAdd) ProfileDialog(initial = null, onClose = { showProfileAdd = false })
+
+        // 发现新版本:应用内更新弹窗(带更新说明、下载进度与安装入口)
+        UpdateDialog(ctx, onOpenSettings = { tab = 3 })
     }
+}
+
+// ============================================================ 更新弹窗(发现新版本)
+@Composable
+private fun UpdateDialog(ctx: android.content.Context, onOpenSettings: () -> Unit) {
+    val update = UpdateFlow.state
+    val remote = update.dialog ?: return
+    AlertDialog(
+        onDismissRequest = { UpdateFlow.dismissDialog() },
+        title = { Text("发现新版本 v${remote.versionName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("当前 v${BuildConfig.VERSION_NAME} → 最新 v${remote.versionName} · ${fmtSize(remote.size)}" +
+                    if (remote.source == "pc") "（来自已配对电脑）" else "",
+                    fontSize = 12.sp, color = Muted)
+                if (remote.notes.isNotBlank()) {
+                    Text(remote.notes.take(1200), fontSize = 13.sp, lineHeight = 20.sp,
+                        modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()))
+                }
+                if (update.downloading) {
+                    LinearProgressIndicator(progress = { update.progress.coerceAtLeast(0) / 100f },
+                        modifier = Modifier.fillMaxWidth())
+                    Text("正在下载… ${update.progress.coerceAtLeast(0)}%", fontSize = 12.sp, color = Accent)
+                }
+                if (update.readyFile != null) {
+                    Text("已下载并通过校验，点击安装由系统确认。", fontSize = 12.sp, color = Green)
+                } else if (!update.downloading) {
+                    Text("下载后自动校验 SHA-256 与安装包签名，绝不自动安装。", fontSize = 11.sp, color = Faint)
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                update.readyFile != null -> TextButton(onClick = { UpdateFlow.install(ctx) }) { Text("安装更新") }
+                update.downloading -> TextButton(onClick = { UpdateFlow.dismissDialog(); onOpenSettings() }) { Text("查看进度") }
+                else -> TextButton(onClick = { UpdateFlow.startDownload(ctx) }) { Text("立即更新") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { UpdateFlow.remindLater(ctx) }) {
+                Text(if (update.downloading || update.readyFile != null) "关闭，稍后继续" else "稍后再说")
+            }
+        },
+    )
 }
 
 // ============================================================ 页面 0:消息
@@ -1220,15 +1283,9 @@ private fun HubPairingQr(hubPeers: Int) {
 @Composable
 fun SettingsPage() {
     val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
-    val main = remember { Handler(Looper.getMainLooper()) }
-    var checking by remember { mutableStateOf(false) }
-    var found by remember { mutableStateOf<Updater.Remote?>(null) }
-    var updateMsg by remember { mutableStateOf("手动检查或开启自动检查，只提醒，不会自动下载。") }
-    var progress by remember { mutableStateOf(-1) }
-    var downloading by remember { mutableStateOf(false) }
-    var readyFile by remember { mutableStateOf<java.io.File?>(null) }
+    // 更新流程状态(检查/下载/安装)由 UpdateFlow 持有,弹窗与设置页共享同一份进度
+    val update = UpdateFlow.state
     var repository by rememberSaveable { mutableStateOf(Prefs.updateRepository(ctx)) }
     var repoError by remember { mutableStateOf<String?>(null) }
     var autoCheck by remember { mutableStateOf(Prefs.autoCheckUpdates(ctx)) }
@@ -1284,65 +1341,7 @@ fun SettingsPage() {
     }
     fun doCheck() {
         if (!saveRepository()) return
-        checking = true
-        found = null
-        readyFile = null
-        progress = -1
-        scope.launch {
-            try {
-                val (remote, reached, error) = withContext(Dispatchers.IO) { Updater.checkAll(ctx) }
-                found = remote
-                updateMsg = when {
-                    !reached -> "检查失败：${error.ifBlank { "无法访问更新源" }}"
-                    remote != null -> "发现 v${remote.versionName} · ${fmtSize(remote.size)}"
-                    error.isNotBlank() -> "可访问的更新源暂无新版。$error"
-                    else -> "已是最新版本"
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                updateMsg = "检查未完成，请确认仓库可匿名访问或已连接局域网电脑。"
-            } finally {
-                checking = false
-            }
-        }
-    }
-    fun doDownload() {
-        val remote = found ?: return
-        progress = 0
-        downloading = true
-        scope.launch {
-            try {
-                val (file, error) = withContext(Dispatchers.IO) {
-                    Updater.download(ctx, remote) { p -> main.post { progress = p.coerceIn(0, 100) } }
-                }
-                readyFile = file
-                updateMsg = if (file != null) "下载并校验完成。请点击安装，由系统确认。" else "下载失败：${error.orEmpty()}"
-                progress = if (file != null) 100 else -1
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                progress = -1
-                updateMsg = "下载或校验失败，未安装更新。"
-            } finally {
-                downloading = false
-            }
-        }
-    }
-    fun doInstall() {
-        val file = readyFile ?: return
-        try {
-            if (!Updater.canInstall(ctx)) {
-                toast(ctx, "请允许本应用安装更新，返回后再次点击安装")
-                Updater.requestInstallPermission(ctx)
-            } else {
-                Updater.install(ctx, file)
-            }
-        } catch (_: Exception) {
-            updateMsg = "安装被阻止：安装包校验未通过或系统无法打开。请重新检查并下载。"
-            readyFile = null
-            progress = -1
-        }
+        UpdateFlow.checkNow(ctx)
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -1354,18 +1353,25 @@ fun SettingsPage() {
         Card(colors = CardDefaults.cardColors(containerColor = CardBg), shape = RoundedCornerShape(20.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("应用更新", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                Text(updateMsg, fontSize = 13.sp, color = if (found != null) Green else Muted, lineHeight = 21.sp)
-                if (checking || downloading) {
-                    if (downloading) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
-                    else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(update.message, fontSize = 13.sp,
+                    color = when {
+                        update.available != null -> Accent
+                        update.message.startsWith("检查失败") || update.message.startsWith("下载未完成") -> Orange
+                        update.message.contains("已是最新") || update.message.contains("完成") -> Green
+                        else -> Muted
+                    }, lineHeight = 21.sp)
+                if (update.checking) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (update.downloading) {
+                    LinearProgressIndicator(progress = { update.progress.coerceAtLeast(0) / 100f },
+                        modifier = Modifier.fillMaxWidth())
                 }
-                found?.let { remote ->
+                update.available?.let { remote ->
                     Surface(color = CodeBg, shape = RoundedCornerShape(12.dp)) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("来源：${if (remote.source == "pc") "已配对电脑 · ${remote.host}:${remote.port}" else "GitHub · $repository"}",
+                            Text("新版本 v${remote.versionName} · ${fmtSize(remote.size)} · 来源：${if (remote.source == "pc") "已配对电脑" else "GitHub"}",
                                 color = Accent, fontSize = 12.sp)
                             if (remote.notes.isNotBlank()) Text(remote.notes.take(4000), fontSize = 12.sp, color = Muted, lineHeight = 19.sp)
-                            Text(if (remote.sha256.isNotBlank()) "SHA-256 完整性校验已提供" else "此更新源未提供 SHA-256，安装前仍需通过包验证",
+                            Text(if (remote.sha256.isNotBlank()) "下载后自动校验 SHA-256 与安装包签名" else "此更新源未提供 SHA-256，安装前仍需通过包验证",
                                 color = if (remote.sha256.isNotBlank()) Muted else Orange, fontSize = 11.sp)
                             if (remote.releaseUrl.isNotBlank()) TextButton(onClick = {
                                 val uri = Uri.parse(remote.releaseUrl)
@@ -1377,36 +1383,51 @@ fun SettingsPage() {
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { doCheck() }, enabled = !checking && !downloading, modifier = Modifier.weight(1f)) {
-                        Text(if (checking) "检查中…" else "检查更新")
+                    Button(onClick = { doCheck() }, enabled = !update.checking && !update.downloading, modifier = Modifier.weight(1f)) {
+                        Text(if (update.checking) "检查中…" else "检查更新")
                     }
-                    if (found != null && readyFile == null) OutlinedButton(onClick = { doDownload() },
-                        enabled = !checking && !downloading, modifier = Modifier.weight(1f)) {
-                        Text(if (downloading) "下载 $progress%" else "下载更新")
+                    if (update.available != null && update.readyFile == null && !update.downloading) {
+                        OutlinedButton(onClick = { UpdateFlow.startDownload(ctx) }, modifier = Modifier.weight(1f)) {
+                            Text("下载更新")
+                        }
                     }
-                    if (readyFile != null) OutlinedButton(onClick = { doInstall() }, modifier = Modifier.weight(1f)) { Text("安装更新") }
+                    if (update.downloading) {
+                        OutlinedButton(onClick = { UpdateFlow.cancelDownload() }, modifier = Modifier.weight(1f)) {
+                            Text("暂停下载 ${update.progress.coerceAtLeast(0)}%")
+                        }
+                    }
+                    if (update.readyFile != null) {
+                        OutlinedButton(onClick = { UpdateFlow.install(ctx) }, modifier = Modifier.weight(1f)) {
+                            Text("安装更新")
+                        }
+                    }
+                }
+                if (update.readyFile != null) {
+                    Text("已下载并通过校验，点击\"安装更新\"由系统确认安装；不必重新下载。",
+                        color = Green, fontSize = 12.sp, lineHeight = 19.sp)
                 }
                 HorizontalDivider(color = Line)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("自动检查更新", fontSize = 14.sp)
-                        Text("启动时及约每 12 小时检查，仅通知新版", color = Muted, fontSize = 11.sp)
+                        Text("打开应用自动检查（60 秒内不重复）；后台约每 12 小时检查，仅通知新版", color = Muted, fontSize = 11.sp)
                     }
                     Switch(checked = autoCheck, onCheckedChange = {
                         autoCheck = it
                         Prefs.setAutoCheckUpdates(ctx, it)
+                        if (it) Prefs.setLastUpdateCheckAt(ctx, 0)
                         UpdateWorker.schedule(ctx, checkAtStartup = it)
                     })
                 }
                 if (!notificationPermission) Text("系统通知尚未开启；自动检查不会弹出提醒，可在下方自愿授权。", color = Orange, fontSize = 12.sp)
                 OutlinedTextField(value = repository, onValueChange = { repository = it; repoError = null },
                     label = { Text("GitHub 仓库 owner/repo") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    enabled = !checking && !downloading, isError = repoError != null)
+                    enabled = !update.downloading, isError = repoError != null)
                 repoError?.let { Text(it, color = Red, fontSize = 12.sp) }
                 TextButton(onClick = {
-                    if (saveRepository()) { found = null; readyFile = null; toast(ctx, "更新仓库已保存") }
-                }, enabled = !checking && !downloading) { Text("保存仓库") }
-                Text("默认 Danjack85/LinkAssist。私有仓库无法匿名检查或下载；本应用绝不内置 GitHub token。可使用已配对电脑提供的局域网更新源。后台检查受系统省电策略影响，不会自动下载或安装。",
+                    if (saveRepository()) { UpdateFlow.onRepositoryChanged(); toast(ctx, "更新仓库已保存") }
+                }, enabled = !update.downloading) { Text("保存仓库") }
+                Text("默认 Danjack85/LinkAssist。检查优先走 GitHub 公开 Release；网络无法连接 GitHub 时会自动改用已配对电脑的局域网更新源。下载支持断点续传，安装前校验包名、版本与签名；绝不自动下载或安装。",
                     color = Muted, fontSize = 12.sp, lineHeight = 20.sp)
             }
         }

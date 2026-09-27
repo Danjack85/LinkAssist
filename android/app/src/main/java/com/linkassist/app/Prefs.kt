@@ -106,6 +106,18 @@ object Prefs {
         sp(c).edit().putLong("update_last_notified", versionCode.coerceAtLeast(0L)).apply()
     }
 
+    /** 用户点过"稍后再说"的版本：同一版本不再弹更新弹窗 */
+    fun skippedUpdateVersion(c: Context): String = sp(c).getString("update_skipped_version", "").orEmpty()
+    fun setSkippedUpdateVersion(c: Context, versionName: String) {
+        sp(c).edit().putString("update_skipped_version", versionName.take(80)).apply()
+    }
+
+    /** 上次打开应用自动检查的时间(60 秒防抖用) */
+    fun lastUpdateCheckAt(c: Context): Long = sp(c).getLong("update_last_check_at", 0L)
+    fun setLastUpdateCheckAt(c: Context, millis: Long) {
+        sp(c).edit().putLong("update_last_check_at", millis.coerceAtLeast(0L)).apply()
+    }
+
     fun smsForwardingEnabled(c: Context): Boolean = sp(c).getBoolean("forward_sms", false)
     fun setSmsForwardingEnabled(c: Context, on: Boolean) {
         sp(c).edit().putBoolean("forward_sms", on).apply()
