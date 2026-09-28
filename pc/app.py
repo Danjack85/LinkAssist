@@ -16,6 +16,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 try:
@@ -46,9 +47,53 @@ MINI_SIZE = (430, 620)  # 迷你面板默认尺寸(逻辑像素)
 MINI_LIMITS = (360, 420, 1400, 1600)   # 最小宽/最小高/最大宽/最大高
 
 
+def _port_in_use(port: int) -> bool:
+    """端口是否已被占用。
+
+    只用 bind 测试在 Windows 上不可靠:当另一个程序以 SO_REUSEADDR 绑了
+    127.0.0.1:8765 时,本程序 bind 0.0.0.0:8765 仍可能成功,但之后
+    127.0.0.1 的连接会被对方截走(网页窗口就打开了别人的页面)。
+    因此先探测"能否连上",再补 bind 测试(覆盖端口被保留的情况)。
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.35)
+    try:
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return True
+    finally:
+        probe.close()
+    for host in ("0.0.0.0", "127.0.0.1"):
+        test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            test.bind((host, port))
+        except OSError:
+            return True
+        finally:
+            test.close()
+    return False
+
+
+def _probe_status(port: int, timeout: float = 0.8) -> str:
+    """探测端口上的服务是谁:ours=本程序 / foreign=别的程序 / none=还没有服务"""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=timeout) as resp:
+            raw = resp.read(65536)
+    except urllib.error.HTTPError:
+        return "foreign"          # 有服务在响应,但不是我们的接口
+    except Exception:
+        return "none"             # 端口还没有服务在监听
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return "foreign"
+    return "ours" if isinstance(data, dict) and data.get("app") == "linkassist" else "foreign"
+
+
 def pick_port(preferred: int) -> int:
     """优先使用配置端口;被占用则向后找一个空闲端口"""
     for p in range(preferred, preferred + 10):
+        if _port_in_use(p):
+            continue
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             s.bind(("0.0.0.0", p))
@@ -58,6 +103,19 @@ def pick_port(preferred: int) -> int:
         finally:
             s.close()
     return preferred
+
+
+def _show_startup_error(reason):
+    """所有候选端口都不可用时,明确报错,而不是打开一个显示别人页面的窗口"""
+    message = ("互传助手无法启动本机服务。\n\n"
+               f"{reason or '端口不可用'}\n\n"
+               "请关闭占用端口的程序后重试,或修改 config.json 里的 port。")
+    srv.log("[启动失败]", message.replace("\n", " "))
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.user32.MessageBoxW(0, message, "LinkAssist · 互传助手", 0x10)
+        except Exception:
+            pass
 
 
 def allow_firewall(port: int):
@@ -76,6 +134,9 @@ def allow_firewall(port: int):
         srv.log("[防火墙] 自动放行跳过:", e)
 
 
+BACKEND_ERROR = {"text": ""}   # start_backend 失败原因,供端口选择循环判断
+
+
 def start_backend(port: int):
     try:
         srv.LAN_IP = srv.lan_ip()
@@ -83,6 +144,7 @@ def start_backend(port: int):
         web = srv.web
         web.run_app(srv.create_app(), host="0.0.0.0", port=port, print=lambda *a, **k: None)
     except Exception as e:
+        BACKEND_ERROR["text"] = f"端口 {port} 服务启动失败: {e}"
         srv.log("[服务] 启动失败:", e)
 
 
@@ -529,14 +591,16 @@ def set_ball_enabled(enabled):
     return ball_win is not None
 
 
-def wait_backend(port: int, timeout: float = 15.0):
+def wait_backend(port: int, timeout: float = 12.0):
+    """等到端口上的服务确认是我们自己的(返回 True);是别的程序则立即 False"""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=0.5)
+        state = _probe_status(port)
+        if state == "ours":
             return True
-        except Exception:
-            time.sleep(0.1)
+        if state == "foreign":
+            return False
+        time.sleep(0.15)
     return False
 
 
@@ -549,6 +613,7 @@ def _existing_instance_port():
     """已在后台运行(窗口收进了托盘)时返回它的端口,否则 None。
 
     重新双击 exe 不应开出第二个实例;直接唤回正在后台运行的窗口。
+    端口上如果不是我们的服务(陈旧记录/端口被别的程序占用),清掉记录后照常启动。
     """
     try:
         path = _pid_file_path()
@@ -558,11 +623,12 @@ def _existing_instance_port():
             info = json.load(fh)
         port = int(info.get("port", 0))
         if port < 1 or port > 65535:
+            _remove_pid_file()
             return None
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=1.5) as resp:
-            if resp.status != 200:
-                return None
-        return port
+        if _probe_status(port) == "ours":
+            return port
+        _remove_pid_file()
+        return None
     except Exception:
         return None
 
@@ -589,6 +655,12 @@ def _wake_existing_instance(port) -> bool:
                                          headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=3) as resp:
             return resp.status == 200
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            srv.log("[单实例] 检测到旧版本实例(没有唤回接口),本次改为启动新实例。")
+        else:
+            srv.log("[单实例] 唤回已有窗口失败: HTTP", exc.code)
+        return False
     except Exception as exc:
         srv.log("[单实例] 唤回已有窗口失败:", exc)
         return False
@@ -604,16 +676,48 @@ def main():
         sys.exit(0)
     srv.load_history()
     srv.load_transfers()
-    port = pick_port(int(srv.CFG["port"]))
+
+    # 选择端口:跳过被其他程序占用的端口;每启动一个都确认"端口上的服务确实是自己"
+    # 才创建界面 —— 否则 Windows 的端口共享可能让窗口打开到别的程序的页面上。
+    preferred = int(srv.CFG["port"])
+    port = None
+    last_reason = ""
+    for offset in range(10):
+        candidate = preferred + offset
+        if candidate > 65535:
+            break
+        if _port_in_use(candidate):
+            last_reason = f"端口 {candidate} 已被其他程序占用"
+            srv.log(f"[端口] {last_reason},跳过")
+            continue
+        BACKEND_ERROR["text"] = ""
+        threading.Thread(target=start_backend, args=(candidate,), daemon=True).start()
+        deadline = time.time() + 12
+        state = "none"
+        while time.time() < deadline:
+            state = _probe_status(candidate)
+            if state != "none":
+                break
+            time.sleep(0.15)
+        if state == "ours":
+            port = candidate
+            break
+        if state == "foreign":
+            last_reason = f"端口 {candidate} 被其他程序抢先占用"
+        else:
+            last_reason = BACKEND_ERROR["text"] or f"端口 {candidate} 上服务启动超时"
+        srv.log(f"[端口] {last_reason},尝试下一个端口")
+
+    if port is None:
+        _show_startup_error(last_reason)
+        sys.exit(1)
+
     srv.CFG["port"] = port
     PORT = port
     # 实际端口通过 UDP 发现(37777)对外公布,手机端连接失败时会自动跟随,无需写回配置
     _write_pid_file(port)
     srv.SHOW_WINDOW = api.show_main
-
-    threading.Thread(target=start_backend, args=(port,), daemon=True).start()
-    if not wait_backend(port):
-        srv.log("[服务] 后端未就绪,仍继续启动界面(可能稍后自动恢复)")
+    srv.log(f"[服务] 已确认本机服务就绪: http://127.0.0.1:{port}")
     srv.log("[网络] 若手机无法连接，请在 Windows 提示中仅允许专用网络访问。")
 
     # 主窗口就是主程序:启动即显示完整控制台

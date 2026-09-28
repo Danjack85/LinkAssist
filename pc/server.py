@@ -442,7 +442,10 @@ async def ball_page(request):
 
 
 async def api_status(request):
+    # "app" 用于身份识别:桌面端启动/单实例检测时确认端口上跑的是本程序
     return web.json_response({
+        "app": "linkassist",
+        "version": VERSION,
         "addr": LAN_IP, "port": CFG["port"], "token": CFG["token"],
         "name": CFG["name"],
         "devices": [d["name"] for d in STATE["devices"].values()],
