@@ -26,6 +26,12 @@ except Exception:
 import webview
 
 try:
+    from webview.window import FixPoint
+    FIXPOINT_NW = FixPoint.NORTH | FixPoint.WEST   # 缩放时固定左上角,向右/下生长
+except Exception:  # 老版本 pywebview 的兜底(NORTH=1, WEST=4)
+    FIXPOINT_NW = 5
+
+try:
     webview.settings["ALLOW_DOWNLOADS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
 except (AttributeError, KeyError, TypeError):
@@ -36,7 +42,8 @@ import server as srv
 
 BALL_SIZE = 84          # 悬浮球窗口逻辑像素(实际按屏幕 DPI 缩放)
 BALL_BG = "#243f3c"     # 裁剪生效前的底色,与球体主色一致,避免闪白
-MINI_SIZE = (430, 620)  # 迷你面板尺寸(逻辑像素)
+MINI_SIZE = (430, 620)  # 迷你面板默认尺寸(逻辑像素)
+MINI_LIMITS = (360, 420, 1400, 1600)   # 最小宽/最小高/最大宽/最大高
 
 
 def pick_port(preferred: int) -> int:
@@ -220,7 +227,7 @@ class Api:
         return True
 
     def open_mini(self):
-        """点悬浮球:打开/聚焦独立迷你面板,不改动主窗口"""
+        """打开/聚焦独立迷你面板(托盘菜单用;悬浮球点击走 toggle_mini)"""
         global mini_win
         if mini_win is not None:
             try:
@@ -234,6 +241,61 @@ class Api:
             srv.log("[迷你面板] 打开失败:", exc)
             mini_win = None
             return False
+        return True
+
+    def toggle_mini(self):
+        """点悬浮球:迷你面板已打开就关掉,关着就打开。
+
+        返回 True 表示现在处于打开状态。
+        """
+        w = mini_win
+        if w is not None:
+            try:
+                form = getattr(w, "native", None)
+                if form is not None and form.Visible:
+                    w.hide()
+                    return False
+                w.show()
+                return True
+            except Exception:
+                pass   # 窗口状态异常时按新建处理
+        return self.open_mini()
+
+    def mini_open(self):
+        """迷你面板当前是否显示(悬浮球据此显示开关状态)"""
+        w = mini_win
+        if w is None:
+            return False
+        try:
+            form = getattr(w, "native", None)
+            return bool(form is not None and form.Visible)
+        except Exception:
+            return False
+
+    def resize_mini(self, width, height, remember=False):
+        """迷你面板拖动缩放(逻辑像素,由 pywebview 按 DPI 换算)。
+
+        缩放后做一次边界校正:窗口超出工作区就往屏幕内收,避免拖大之后
+        底部输入框跑到屏幕外。remember=True 时把尺寸记进配置。
+        """
+        w = mini_win
+        if w is None:
+            return False
+        try:
+            min_w, min_h, max_w, max_h = MINI_LIMITS
+            width = max(min_w, min(int(width), max_w))
+            height = max(min_h, min(int(height), max_h))
+        except (TypeError, ValueError):
+            return False
+        try:
+            w.resize(width, height, FIXPOINT_NW)
+        except Exception as exc:
+            srv.log("[迷你面板] 缩放失败:", exc)
+            return False
+        _clamp_window_into_work_area(w)
+        if remember:
+            srv.CFG["miniWidth"], srv.CFG["miniHeight"] = width, height
+            srv.save_config(srv.CFG)
         return True
 
     def close_mini(self):
@@ -375,15 +437,57 @@ def create_ball_window(port):
     return win
 
 
+def _clamp_window_into_work_area(win):
+    """把窗口收进屏幕工作区:拖大后若超出右/下边缘,自动往屏幕内平移"""
+    form = getattr(win, "native", None)
+    if form is None:
+        return
+    try:
+        import clr  # noqa: F401
+        from System import Action
+
+        def apply():
+            try:
+                handle = int(form.Handle.ToInt64())
+                left, top, right, bottom = _work_area()
+                width, height = int(form.Width), int(form.Height)
+                x, y = int(form.Left), int(form.Top)
+                nx = min(max(left, x), max(left, right - width))
+                ny = min(max(top, y), max(top, bottom - height))
+                if (nx, ny) == (x, y):
+                    return
+                SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0001, 0x0004, 0x0010
+                ctypes.windll.user32.SetWindowPos(handle, 0, nx, ny, 0, 0,
+                                                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+            except Exception as exc:
+                srv.log("[迷你面板] 边界校正失败:", exc)
+
+        form.Invoke(Action(apply))
+    except Exception:
+        pass
+
+
+def _mini_size():
+    """迷你面板尺寸:优先上次用户拖拽后的尺寸"""
+    min_w, min_h, max_w, max_h = MINI_LIMITS
+    try:
+        width = int(srv.CFG.get("miniWidth", MINI_SIZE[0]))
+        height = int(srv.CFG.get("miniHeight", MINI_SIZE[1]))
+    except (TypeError, ValueError):
+        width, height = MINI_SIZE
+    return max(min_w, min(width, max_w)), max(min_h, min(height, max_h))
+
+
 def create_mini_window(port):
-    """创建独立迷你面板:只显示消息与发送框的小窗口,贴在屏幕右下角"""
+    """创建独立迷你面板:深色聊天小窗,可拖动缩放,默认贴屏幕右下角"""
+    width, height = _mini_size()
     win = webview.create_window(
         "LinkAssist · 迷你面板",
         f"http://127.0.0.1:{port}/?mini=1&app=1",
         js_api=api,
-        width=MINI_SIZE[0], height=MINI_SIZE[1], min_size=(340, 420),
+        width=width, height=height, min_size=(MINI_LIMITS[0], MINI_LIMITS[1]),
         frameless=True, on_top=True, shadow=True,
-        background_color="#101716",
+        background_color="#0d1413",
     )
     threading.Thread(target=_place_side_window, args=(win,), daemon=True).start()
     return win

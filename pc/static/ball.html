@@ -30,7 +30,7 @@
   </style>
 </head>
 <body>
-  <button id="ball" class="off pywebview-drag-region" type="button" aria-label="打开迷你面板，正在连接本机服务" title="互传助手 · 正在连接本机服务。点击打开迷你面板，拖动移动，右键打开主窗口。">
+  <button id="ball" class="off pywebview-drag-region" type="button" aria-label="打开迷你面板，正在连接本机服务" title="互传助手 · 正在连接本机服务。点击打开/关闭迷你面板，拖动移动，右键打开主窗口。">
     <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 7-1 1a4.25 4.25 0 0 1-6-6l4-4a4.25 4.25 0 0 1 6 0m2 1 1-1a4.25 4.25 0 0 1 6 6l-4 4a4.25 4.25 0 0 1-6 0" transform="translate(1 0)"/></svg>
     <span id="status" aria-hidden="true"></span><span id="badge" hidden aria-hidden="true"></span>
   </button>
@@ -43,8 +43,8 @@
       const state = !service ? '本机服务未连接' : online ? '设备已连接' : '等待设备连接';
       ball.classList.toggle('off', !service || !online); ball.classList.toggle('unread', unread > 0);
       badge.hidden = unread === 0; badge.textContent = unread > 99 ? '99+' : String(unread);
-      ball.setAttribute('aria-label', `打开迷你面板，${state}${unread ? `，${unread} 条未读消息` : ''}`);
-      ball.title = extra || `互传助手 · ${state}${unread ? ` · ${unread} 条未读` : ''}。点击打开迷你面板，拖动移动，右键打开主窗口。`;
+      ball.setAttribute('aria-label', `打开或关闭迷你面板，${state}${unread ? `，${unread} 条未读消息` : ''}`);
+      ball.title = extra || `互传助手 · ${state}${unread ? ` · ${unread} 条未读` : ''}。点击打开/关闭迷你面板，拖动移动，右键打开主窗口。`;
     }
     function reconnect() {
       service = false; online = false; describe(); clearTimeout(retryTimer);
@@ -68,13 +68,16 @@
       };
       ws.onerror = () => ws.close(); ws.onclose = () => { if (socket === ws) { clearTimeout(handshake); reconnect(); } };
     }
-    /* 左键:打开独立迷你面板(不展开主窗口);右键:打开主窗口 */
-    async function openMini() {
+    /* 左键:打开/关闭迷你面板(开关式);右键:打开主窗口 */
+    async function toggleMini() {
       if (busy) return; const api = window.pywebview?.api;
-      if (!api?.open_mini) return describe('桌面桥接尚未就绪，请稍后再点击。');
+      if (!api?.toggle_mini) return describe('桌面桥接尚未就绪，请稍后再点击。');
       busy = true;
-      try { if (await api.open_mini()) unread = 0; else describe('迷你面板打开失败，可右键打开主窗口。'); describe(); }
-      catch (_) { describe('暂时无法打开迷你面板，请右键打开主窗口。'); }
+      try {
+        const opened = await api.toggle_mini();
+        if (opened) unread = 0;
+        describe(opened ? '迷你面板已打开；再次点击关闭。' : '迷你面板已关闭。');
+      } catch (_) { describe('暂时无法切换迷你面板，请右键打开主窗口。'); }
       finally { busy = false; }
     }
     async function openMain() {
@@ -90,7 +93,7 @@
     });
     window.addEventListener('mouseup', () => { start = null; });
     window.addEventListener('blur', () => { start = null; });
-    ball.addEventListener('click', event => { if (event.detail === 0 || !moved) openMini(); moved = false; });
+    ball.addEventListener('click', event => { if (event.detail === 0 || !moved) toggleMini(); moved = false; });
     ball.addEventListener('contextmenu', event => { event.preventDefault(); openMain(); });
     connect();
   </script>

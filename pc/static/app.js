@@ -222,7 +222,61 @@
     const closeMini = $('#btnQuit'); closeMini.title = '关闭迷你面板'; closeMini.setAttribute('aria-label', '关闭迷你面板');
     closeMini.onclick = () => nativeCall('close_mini', '此操作仅在桌面客户端中可用。');
     const input = $('#messageInput'); if (input) input.placeholder = '发消息给手机…';
+    installMiniResize();
     navigate('messages', false);
+  }
+  /* 迷你面板缩放:拖右边缘 / 下边缘 / 右下角;窗口大小交给桌面端设置,尺寸记忆在配置里 */
+  function installMiniResize() {
+    const ready = () => typeof window.pywebview?.api?.resize_mini === 'function';
+    if (!ready()) {
+      // 页面加载时 pywebview 桥接可能尚未注入,等它就绪后再装(避免重复安装)
+      if (installMiniResize.pending) return;
+      installMiniResize.pending = true;
+      const retry = () => { installMiniResize.pending = false; installMiniResize(); };
+      window.addEventListener('pywebviewready', retry, { once: true });
+      let tries = 0;
+      const timer = setInterval(() => { if (ready() || ++tries > 40) { clearInterval(timer); retry(); } }, 250);
+      return;
+    }
+    if (installMiniResize.done) return;
+    installMiniResize.done = true;
+    const drag = { dir: '', startX: 0, startY: 0, startW: 0, startH: 0, lastW: 0, lastH: 0, sentAt: 0 };
+    function apply(width, height, remember) {
+      const minW = 360, minH = 420;
+      width = Math.max(minW, Math.min(Math.round(width), 1400));
+      height = Math.max(minH, Math.min(Math.round(height), 1600));
+      try { window.pywebview.api.resize_mini(width, height, !!remember).catch(() => {}); } catch (_) { /* 关闭瞬间忽略 */ }
+    }
+    function start(dir, event) {
+      if (event.button !== 0) return;
+      drag.dir = dir; drag.startX = event.clientX; drag.startY = event.clientY;
+      drag.startW = window.innerWidth; drag.startH = window.innerHeight;
+      drag.sentAt = 0; document.body.classList.add('resizing');
+      event.preventDefault();
+    }
+    function move(event) {
+      if (!drag.dir) return;
+      drag.lastW = drag.startW + (event.clientX - drag.startX);
+      drag.lastH = drag.startH + (event.clientY - drag.startY);
+      const now = performance.now();                      // 拖动中限频,松手时再记尺寸
+      if (now - drag.sentAt < 45) return;
+      drag.sentAt = now; apply(drag.lastW, drag.lastH, false);
+    }
+    function end() {
+      if (!drag.dir) return;
+      apply(drag.lastW || window.innerWidth, drag.lastH || window.innerHeight, true);
+      drag.dir = ''; drag.lastW = 0; drag.lastH = 0;
+      document.body.classList.remove('resizing');
+    }
+    [['right', '左右拖动调整宽度'], ['bottom', '上下拖动调整高度'], ['corner', '拖动调整窗口大小']].forEach(([dir, label]) => {
+      const grip = el('div', 'mini-resize ' + dir);
+      grip.setAttribute('role', 'separator'); grip.setAttribute('aria-label', label); grip.title = label;
+      grip.addEventListener('mousedown', event => start(dir, event));
+      document.body.append(grip);
+    });
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    window.addEventListener('blur', end);
   }
 
   /* Pairing codes are local server SVG images, never inserted as markup. */

@@ -510,10 +510,11 @@ body.mini .window-button .icon { width: 15px; height: 15px; }
 body.mini .window-button:hover { background: #1c2a27; color: #e8f2ef; }
 body.mini .window-close:hover { background: #b8474a; color: #fff; }
 body.mini .topbar { min-height: 0; padding: 8px 12px; gap: 10px; background: #111a19; border-bottom: 1px solid #1d2a27; }
-body.mini .topbar-actions { width: 100%; gap: 10px; justify-content: space-between; }
-body.mini .service-status { color: #93a8a2; font-size: 11.5px; }
-body.mini .top-recipient { flex: 1; justify-content: flex-end; gap: 7px; color: #7c918b; }
-body.mini .top-recipient select { min-height: 30px; max-width: 190px; padding: 3px 8px; font-size: 12px; border-radius: 9px; background: #182322; border: 1px solid #273834; color: #e8f2ef; }
+body.mini .topbar-actions { width: 100%; gap: 10px; }
+body.mini .service-status { order: 0; flex: none; color: #93a8a2; font-size: 11.5px; }
+body.mini .top-recipient { order: 1; flex: 1; min-width: 0; justify-content: flex-end; gap: 7px; color: #7c918b; }
+body.mini .top-recipient > span { display: none; }
+body.mini .top-recipient select { min-height: 30px; max-width: 200px; padding: 3px 8px; font-size: 12px; border-radius: 9px; background: #182322; border: 1px solid #273834; color: #e8f2ef; }
 
 /* 消息流 */
 body.mini .workspace-scroll { overflow: hidden; }
@@ -551,4 +552,14 @@ body.mini textarea::placeholder { color: #6d827c; }
 body.mini .composer-bottom { margin-top: 8px; gap: 10px; justify-content: space-between; }
 body.mini .composer-bottom p { flex: 1; font-size: 10.5px; color: #6d827c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 body.mini #btnSend { min-height: 36px; padding: 6px 20px; border-radius: 10px; font-size: 13px; }
+
+/* 迷你面板缩放手柄:贴右/下/右下角,鼠标可拖拽改窗口大小 */
+body.mini .mini-resize { position: fixed; z-index: 60; -webkit-app-region: no-drag; }
+body.mini .mini-resize.right { top: 8px; right: 0; bottom: 16px; width: 6px; cursor: ew-resize; }
+body.mini .mini-resize.bottom { left: 8px; right: 16px; bottom: 0; height: 6px; cursor: ns-resize; }
+body.mini .mini-resize.corner { right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+body.mini .mini-resize:hover { background: rgb(86 214 188 / 22%); }
+body.mini .mini-resize.corner:hover { background: none; }
+body.mini.resizing { user-select: none; }
+body.mini.resizing .mini-resize:hover { background: none; }
 
