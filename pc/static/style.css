@@ -486,25 +486,69 @@ textarea::placeholder, input::placeholder { color: #9ba8ad; }
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
 
-/* 迷你面板(?mini=1):点悬浮球打开的独立小窗,只保留消息流与发送框 */
+/* ==========================================================================
+   迷你面板(?mini=1):点悬浮球打开的独立小窗
+   深色聊天式布局,与悬浮球同一套青绿/墨色,只保留:状态栏 + 消息流 + 发送框
+   ========================================================================== */
+body.mini { background: #0d1413; color: #e5efec; }
 body.mini .sidebar,
 body.mini .context-rail,
 body.mini .service-banner,
 body.mini .page-heading,
-body.mini .breadcrumb { display: none; }
-body.mini .topbar { min-height: 52px; padding: 8px 12px; gap: 8px; }
-body.mini .topbar .button.small { font-size: 11px; padding: 6px 10px; }
+body.mini .breadcrumb,
+body.mini .message-search,
+body.mini .message-toolbar,
+body.mini .composer-heading,
+body.mini #btnQuickPair { display: none; }
+
+/* 顶栏:自绘标题条 + 状态行 */
+body.mini .desktop-titlebar { height: 34px; min-height: 34px; padding-left: 11px; background: #0f1716; border-bottom: 1px solid #1d2a27; }
+body.mini .titlebar-label { color: #a9bdb7; font-size: 11.5px; letter-spacing: .3px; gap: 8px; }
+body.mini .titlebar-label .icon { width: 15px; height: 15px; color: #56d6bc; }
+body.mini .window-button { width: 38px; color: #8ba09a; }
+body.mini .window-button .icon { width: 15px; height: 15px; }
+body.mini .window-button:hover { background: #1c2a27; color: #e8f2ef; }
+body.mini .window-close:hover { background: #b8474a; color: #fff; }
+body.mini .topbar { min-height: 0; padding: 8px 12px; gap: 10px; background: #111a19; border-bottom: 1px solid #1d2a27; }
+body.mini .topbar-actions { width: 100%; gap: 10px; justify-content: space-between; }
+body.mini .service-status { color: #93a8a2; font-size: 11.5px; }
+body.mini .top-recipient { flex: 1; justify-content: flex-end; gap: 7px; color: #7c918b; }
+body.mini .top-recipient select { min-height: 30px; max-width: 190px; padding: 3px 8px; font-size: 12px; border-radius: 9px; background: #182322; border: 1px solid #273834; color: #e8f2ef; }
+
+/* 消息流 */
 body.mini .workspace-scroll { overflow: hidden; }
-body.mini .content-grid { display: flex; flex-direction: column; height: 100%; max-width: none; padding: 10px 12px 12px; gap: 0; }
+body.mini .content-grid { display: flex; flex-direction: column; height: 100%; max-width: none; padding: 0; gap: 0; }
 body.mini #mainContent { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-body.mini #page-messages { flex: 1; min-height: 0; }
-body.mini .messages-panel { height: 100%; display: flex; flex-direction: column; }
-body.mini .message-search { display: none; }
-body.mini .message-toolbar { padding: 12px 14px 8px; }
-body.mini .feed-wrap { flex: 1; height: auto; min-height: 0; padding: 12px 14px; }
-body.mini .composer { padding: 10px 14px 12px; }
-body.mini .composer-heading { margin-bottom: 6px; }
-body.mini textarea { min-height: 54px; max-height: 120px; }
-body.mini .desktop-titlebar { height: 30px; min-height: 30px; }
-body.mini .bubble { max-width: 95%; }
+body.mini #page-messages { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+body.mini .messages-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #0d1413; border: 0; border-radius: 0; box-shadow: none; }
+body.mini .feed-wrap { flex: 1; height: auto; min-height: 0; padding: 14px 12px 8px; background: #0d1413; border: 0; scrollbar-color: #2c3d39 transparent; }
+body.mini .feed-wrap::-webkit-scrollbar-thumb { background: #2c3d39; }
+body.mini .feed { gap: 10px; }
+body.mini .bubble { max-width: 88%; min-width: 0; padding: 9px 12px; font-size: 13px; color: #e3ecea; background: #18221f; border: 1px solid #253330; border-radius: 14px 14px 14px 4px; }
+body.mini .bubble.out { background: linear-gradient(135deg, #1d6b5e, #175b51); border-color: #23786a; color: #eafaf5; border-radius: 14px 14px 4px 14px; }
+body.mini .message-meta { margin-bottom: 4px; color: #7f948f; }
+body.mini .bubble .message-source { color: #8fb3a8; }
+body.mini .message-time { color: #6d827c; }
+body.mini .message-card { padding: 11px; background: #141d1b; border: 1px solid #253330; border-radius: 14px; }
+body.mini .message-avatar { background: #1b2624; color: #7f948f; }
+body.mini .message-body { color: #dbe6e3; }
+body.mini .badge.neutral { background: #1e2a27; color: #93a8a2; }
+body.mini .badge.success { background: #14332c; color: #6fe0c6; }
+body.mini .text-button { color: #56d6bc; }
+body.mini .code-button { background: #10201d; border-color: #23443c; color: #6fe0c6; }
+body.mini .attachment-button { color: #6fe0c6; }
+body.mini .media-error { color: #7f948f; }
+body.mini .empty-state.tall { min-height: 0; }
+body.mini .empty-icon { background: #17211f; color: #56d6bc; }
+body.mini .empty-state strong { color: #93a8a2; }
+body.mini .empty-state p { color: #6d827c; }
+
+/* 发送区 */
+body.mini .composer { padding: 10px 12px 12px; background: #111a19; border-top: 1px solid #1d2a27; }
+body.mini textarea { min-height: 46px; height: 46px; max-height: 120px; padding: 11px 13px; font-size: 13px; color: #e8f2ef; background: #16201e; border: 1px solid #273834; border-radius: 12px; }
+body.mini textarea:focus { border-color: #2f6d5f; box-shadow: 0 0 0 3px rgb(45 120 105 / 18%); outline: none; }
+body.mini textarea::placeholder { color: #6d827c; }
+body.mini .composer-bottom { margin-top: 8px; gap: 10px; justify-content: space-between; }
+body.mini .composer-bottom p { flex: 1; font-size: 10.5px; color: #6d827c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.mini #btnSend { min-height: 36px; padding: 6px 20px; border-radius: 10px; font-size: 13px; }
 

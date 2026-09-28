@@ -211,19 +211,17 @@
       else if (result === 'error') toast('未能收进托盘，请使用系统托盘退出。', true);
     } catch (_) { toast('关闭操作未完成，请重试。', true); }
   }
-  /* 迷你面板:独立小窗只保留消息流与发送框 */
+  /* 迷你面板:深色聊天式小窗,标题栏两个按钮分别是"打开主程序"和"关闭" */
   function applyMiniMode() {
     document.body.classList.add('mini');
     document.title = 'LinkAssist · 迷你面板';
-    const label = $('#desktopTitlebar .titlebar-label span'); if (label) label.textContent = 'LinkAssist · 迷你面板';
+    const label = $('#desktopTitlebar .titlebar-label span'); if (label) label.textContent = '互传助手 · 迷你面板';
     const toMain = $('#btnCollapse'); toMain.title = '打开主程序'; toMain.setAttribute('aria-label', '打开主程序');
     toMain.querySelector('use')?.setAttribute('href', '#i-external');
     toMain.onclick = () => nativeCall('show_main', '此操作仅在桌面客户端中可用。');
     const closeMini = $('#btnQuit'); closeMini.title = '关闭迷你面板'; closeMini.setAttribute('aria-label', '关闭迷你面板');
     closeMini.onclick = () => nativeCall('close_mini', '此操作仅在桌面客户端中可用。');
-    const quick = $('#btnQuickPair'); quick.title = '打开主程序';
-    quick.replaceChildren(icon('external'), el('span', '', '主程序'));
-    quick.onclick = () => nativeCall('show_main', '此操作仅在桌面客户端中可用。');
+    const input = $('#messageInput'); if (input) input.placeholder = '发消息给手机…';
     navigate('messages', false);
   }
 
