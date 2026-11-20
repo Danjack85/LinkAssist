@@ -962,7 +962,7 @@ class LinkService : Service() {
             try {
                 val url = endpoint(pc, "api/history").newBuilder().addQueryParameter("limit", "200")
                     .addQueryParameter("deviceId", myDeviceId ?: deviceId()).build()
-                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                httpClient.newCall(Request.Builder().url(url).build()).execute().use { resp ->
                     if (!resp.isSuccessful) return@use
                     val stream = resp.body?.byteStream() ?: return@use
                     val arr = JSONObject(String(TransferIntegrity.readLimited(stream, 1024 * 1024), Charsets.UTF_8)).optJSONArray("messages")
@@ -1269,7 +1269,7 @@ class LinkService : Service() {
             try {
                 val request = Request.Builder().url(endpoint(pc, "api/transfers/${id.substringAfter(':')}/cancel"))
                     .post(RequestBody.create(null, ByteArray(0))).build()
-                client.newCall(request).execute().close()
+                httpClient.newCall(request).execute().close()
             } catch (_: Exception) { }
         }.start()
     }
