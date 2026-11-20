@@ -37,7 +37,7 @@ class HubServer(
     private val onRelay: (type: String, fromName: String, fromDeviceId: String, body: String, code: String?, ts: Long, fileName: String?) -> Unit,
     private val onFileRelay: (name: String, size: Long, file: File) -> Unit,
 ) {
-    private class Peer(val sock: Socket, val out: OutputStream, var id: String, var name: String)
+    private class Peer(val sock: Socket, val out: OutputStream, @Volatile var id: String, @Volatile var name: String)
 
     private var server: ServerSocket? = null
     private val peers = ConcurrentHashMap<String, Peer>()
@@ -53,6 +53,21 @@ class HubServer(
     private val activeUploads = ConcurrentHashMap.newKeySet<String>()
     private val cancelledTransfers = ConcurrentHashMap.newKeySet<String>()
     private val fileDir = File(baseDir, "files").apply { mkdirs() }
+    private val activeConnections = AtomicInteger(0)
+
+    /** 淘汰最旧的传输元数据,并删除对应文件,避免长期运行后内存/磁盘无限增长 */
+    private fun pruneTransferMeta() {
+        val ordered = transferMeta.values.sortedBy { it.optLong("created", 0) }
+        val drop = ordered.take((transferMeta.size - MAX_TRANSFER_META + 50).coerceAtLeast(1))
+        for (item in drop) {
+            val id = item.optString("id")
+            if (id.isBlank()) continue
+            transferMeta.remove(id)
+            try { File(fileDir, "$id.bin").delete() } catch (_: Exception) {}
+            try { File(fileDir, "$id.part").delete() } catch (_: Exception) {}
+            cancelledTransfers.remove(id)
+        }
+    }
 
     fun pairingPayload(): String? = if (running) pairingSessions.payload(lanIp(), HUB_PORT, serverName) else null
 
@@ -133,6 +148,11 @@ class HubServer(
                 ss.accept()
             } catch (_: Exception) {
                 break
+            }
+            if (activeConnections.incrementAndGet() > MAX_CONNECTIONS) {
+                activeConnections.decrementAndGet()
+                try { sock.close() } catch (_: Exception) {}
+                continue
             }
             Thread({ handle(sock) }, "hub-conn").start()
         }
@@ -225,13 +245,18 @@ class HubServer(
                     "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(Charsets.US_ASCII),
             )
             out.flush()
-            sock.soTimeout = 0
+            sock.soTimeout = 75_000
             connKey = "c${connSeq.incrementAndGet()}"
+            if (peers.size >= MAX_PEERS) {
+                try { sock.close() } catch (_: Exception) {}
+                return
+            }
             val peer = Peer(sock, out, "pending-$connKey", "设备")
             peers[connKey] = peer
             readFrames(connKey, peer, ins)
         } catch (_: Exception) {
         } finally {
+            activeConnections.decrementAndGet()
             if (connKey != null) dropPeer(connKey) else try {
                 sock.close()
             } catch (_: Exception) {
@@ -308,7 +333,7 @@ class HubServer(
             if (size < 0 || size > MAX_FILE_SIZE) return errJson("file size invalid")
             val hash = o.optString("sha256")
             if (hash.isNotBlank() && !TransferIntegrity.validSha256(hash)) return errJson("invalid sha256")
-            if (transferMeta.size >= 1000) return errJson("too many transfers; restart hub to clear metadata")
+            if (transferMeta.size >= 200) pruneTransferMeta()
             val id = java.util.UUID.randomUUID().toString().replace("-", "")
             val item = JSONObject().apply {
                 put("id", id); put("name", name); put("size", size)
@@ -379,6 +404,7 @@ class HubServer(
         } finally {
             part.delete()
             activeUploads.remove(id)
+            cancelledTransfers.remove(id)
         }
     }
 
@@ -651,6 +677,9 @@ class HubServer(
         const val HUB_PORT_DISCOVER = 37777
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private const val MAX_FILE_SIZE = 512L * 1024 * 1024
+        private const val MAX_PEERS = 32            // 中心最多同时服务的设备
+        private const val MAX_CONNECTIONS = 64      // 含短连接在内的并发连接上限
+        private const val MAX_TRANSFER_META = 200   // 元数据保留上限(超出按时间淘汰)
 
         private fun readFull(ins: InputStream, buf: ByteArray) {
             var off = 0

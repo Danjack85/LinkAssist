@@ -106,7 +106,8 @@ def test_private_repository_is_reported_and_never_false_latest():
 
 def test_valid_mock_release_check_prefers_asset_api():
     async def scenario():
-        checker = UpdateChecker({"autoCheckUpdates": True, "updateRepository": REPO})
+        # 固定“当前版本”，避免应用自身版本升级后让这条用例失效
+        checker = UpdateChecker({"autoCheckUpdates": True, "updateRepository": REPO}, current="3.0.0")
         release, manifest = fixture_release()
         manifest_url = f"https://github.com/{REPO}/releases/download/{TAG}/linkassist-update.json"
         release["assets"].append({"name": "linkassist-update.json", "id": 123456,

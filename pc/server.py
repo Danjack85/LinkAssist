@@ -22,6 +22,7 @@ import time
 import webbrowser
 import itertools
 import hashlib
+import hmac
 import uuid
 import asyncio
 import contextlib
@@ -39,9 +40,21 @@ except Exception:
 
 
 def log(*args):
-    """打包成 --noconsole exe 后没有 stdout,所有输出静默降级"""
+    """打印日志并写入本地文件(exe 无控制台时仍可排查);超过 2MB 自动轮转"""
+    line = " ".join(str(a) for a in args)
     try:
-        print(*args, flush=True)
+        print(line, flush=True)
+    except Exception:
+        pass
+    path, lock = globals().get("LOG_PATH"), globals().get("_log_lock")
+    if not path or not lock:
+        return
+    try:
+        with lock:
+            if os.path.exists(path) and os.path.getsize(path) > 2 * 1024 * 1024:
+                os.replace(path, path + ".1")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
     except Exception:
         pass
 
@@ -78,10 +91,19 @@ def _safe(name: str, root: str = None) -> str:
 STATIC = _safe("static", ASSET)
 CONFIG_PATH = _safe("config.json", BASE)
 HISTORY_PATH = _safe("messages.jsonl", BASE)
+LOG_PATH = _safe("linkassist.log", BASE)
+_log_lock = threading.Lock()
 
 DISCOVER_PORT = 37777          # UDP 配对探测端口(手机自动发现电脑)
 DISCOVER_MAGIC = "LINKASSIST_DISCOVER"
 MAX_KEEP = 500                 # 内存中最多保留的消息条数
+MAX_DEVICES = 32               # 同时连接的手机上限,防止异常客户端耗尽资源
+SEND_TIMEOUT = 5               # 单次 WS 发送超时(秒);慢客户端不会拖住广播
+HISTORY_MAX_BYTES = 2 * 1024 * 1024
+HISTORY_KEEP_LINES = 2000
+MAX_TRANSFERS = 1000           # 内存中保留的传输记录上限
+MAX_TRANSFER_TOKENS = 4000
+WRITE_QUEUE_MAX = 4000
 MAX_FILE_SIZE = 512 * 1024 * 1024
 TRANSFER_DIR = _safe("transfers", BASE)
 TRANSFERS_PATH = _safe("transfers.jsonl", BASE)
@@ -97,6 +119,8 @@ TRANSFER_TOKENS = {}
 PAIRING = PairingInvitations()
 UPDATE_CHECKER_KEY = web.AppKey("update_checker", UpdateChecker)
 ACTIVE_UPLOADS = set()
+WRITE_QUEUE = None     # 运行时创建的异步写盘队列(asyncio.Queue)
+WRITER_TASK = None
 # 桌面端注册"把主窗口带到前台"的回调;第二次启动 exe 时经本机接口唤回已有窗口
 SHOW_WINDOW = None
 
@@ -133,44 +157,135 @@ def load_config():
     return cfg
 
 
+def _tail_lines(path, max_bytes, max_lines):
+    """只读文件尾部,避免历史文件变大后启动读取拖慢/吃内存"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+                fh.readline()          # 丢掉被截断的半行
+            data = fh.read()
+        lines = data.decode("utf-8", "replace").splitlines()
+        return lines[-max_lines:]
+    except OSError:
+        return []
+
+
+def _rotate_jsonl(path, keep_lines):
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+    if size <= HISTORY_MAX_BYTES:
+        return
+    try:
+        lines = _tail_lines(path, HISTORY_MAX_BYTES // 2, keep_lines)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + ("\n" if lines else ""))
+        os.replace(tmp, path)
+        log(f"[存储] 历史已轮转,保留最近 {len(lines)} 条")
+    except OSError as exc:
+        log("[存储] 轮转失败:", exc)
+
+
+def _append_lines(path, lines):
+    with open(path, "a", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+    if path == HISTORY_PATH:
+        _rotate_jsonl(path, HISTORY_KEEP_LINES)
+
+
+def queue_line(path, line):
+    """把一行记录交给后台写盘队列;队列满时宁丢记录也不阻塞事件循环"""
+    queue = WRITE_QUEUE
+    if queue is None:
+        try:
+            _append_lines(path, [line])
+        except OSError:
+            pass
+        return
+    try:
+        queue.put_nowait((path, line))
+    except asyncio.QueueFull:
+        log("[存储] 写盘队列已满,丢弃一条记录")
+
+
+async def _writer_loop():
+    """批量落盘:把同一文件的多条记录合并成一次写入,降低事件循环开销"""
+    while True:
+        path, line = await WRITE_QUEUE.get()
+        batch = [line]
+        try:
+            while len(batch) < 256:
+                next_path, next_line = WRITE_QUEUE.get_nowait()
+                if next_path != path:
+                    WRITE_QUEUE.put_nowait((next_path, next_line))
+                    break
+                batch.append(next_line)
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            await asyncio.to_thread(_append_lines, path, batch)
+        except Exception as exc:
+            log("[存储] 写入失败:", exc)
+        finally:
+            for _ in batch:
+                WRITE_QUEUE.task_done()
+
+
 def load_history():
     if not os.path.exists(HISTORY_PATH):
         return
-    try:
-        with open(HISTORY_PATH, encoding="utf-8") as f:
-            lines = f.readlines()
-        for line in lines[-MAX_KEEP:]:
-            try:
-                STATE["messages"].append(json.loads(line))
-            except Exception:
-                pass
-    except Exception:
-        pass
+    for line in _tail_lines(HISTORY_PATH, HISTORY_MAX_BYTES, MAX_KEEP):
+        try:
+            item = json.loads(line)
+            if isinstance(item, dict):
+                STATE["messages"].append(item)
+        except ValueError:
+            continue
+    del STATE["messages"][:-MAX_KEEP]
 
 
 def load_transfers():
+    os.makedirs(TRANSFER_DIR, exist_ok=True)
     if not os.path.exists(TRANSFERS_PATH):
-        os.makedirs(TRANSFER_DIR, exist_ok=True)
         return
+    for line in _tail_lines(TRANSFERS_PATH, 4 * 1024 * 1024, MAX_TRANSFERS * 4):
+        try:
+            item = json.loads(line)
+            if isinstance(item, dict) and item.get("id"):
+                TRANSFERS[item["id"]] = item
+        except ValueError:
+            continue
+    # 重启后遗留的"上传中"状态无法恢复(上传令牌只存在内存),标记为中断
+    for item in TRANSFERS.values():
+        if item.get("status") in {"uploading", "offering", "queued"}:
+            item.update(status="failed", error="服务重启，传输已中断")
+    if len(TRANSFERS) > MAX_TRANSFERS:
+        keep = sorted(TRANSFERS.values(), key=lambda x: x.get("created", 0), reverse=True)[:MAX_TRANSFERS]
+        TRANSFERS.clear()
+        TRANSFERS.update({item["id"]: item for item in keep})
+    # 压缩记录文件:每个传输只保留最新状态,避免状态变化无限追加
     try:
-        with open(TRANSFERS_PATH, encoding="utf-8") as f:
-            for line in f.readlines()[-MAX_KEEP:]:
-                try:
-                    item = json.loads(line)
-                    TRANSFERS[item["id"]] = item
-                except Exception:
-                    continue
-    except Exception:
+        tmp = TRANSFERS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for item in TRANSFERS.values():
+                fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+        os.replace(tmp, TRANSFERS_PATH)
+    except OSError:
         pass
 
 
 def save_transfer(item):
     TRANSFERS[item["id"]] = item
-    try:
-        with open(TRANSFERS_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    if len(TRANSFERS) > MAX_TRANSFERS:
+        drop = sorted(TRANSFERS, key=lambda tid: TRANSFERS[tid].get("created", 0))[: len(TRANSFERS) - MAX_TRANSFERS]
+        for tid in drop:
+            TRANSFERS.pop(tid, None)
+    queue_line(TRANSFERS_PATH, json.dumps(item, ensure_ascii=False))
 
 
 def transfer_event(kind, item):
@@ -222,12 +337,32 @@ def next_id():
     return next(_ids)
 
 
+def _coerce_ts(value, fallback):
+    """手机上报的时间戳可能缺失或非法;非法时退回服务端时间"""
+    try:
+        ts = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return ts if 0 < ts < 4102444800000 else fallback
+
+
+async def _send_text(ws, data, timeout=None):
+    """带超时的单次发送:慢客户端/半死连接不会拖住整个广播"""
+    try:
+        await asyncio.wait_for(ws.send_str(data), SEND_TIMEOUT if timeout is None else timeout)
+        return True
+    except Exception:
+        return False
+
+
+async def _send_payload(ws, payload, timeout=None):
+    return await _send_text(ws, json.dumps(payload, ensure_ascii=False), timeout)
+
+
 async def broadcast_ui(payload: dict):
     data = json.dumps(payload, ensure_ascii=False)
     for ws in list(STATE["uis"]):
-        try:
-            await ws.send_str(data)
-        except Exception:
+        if not await _send_text(ws, data):
             STATE["uis"].discard(ws)
 
 
@@ -243,11 +378,7 @@ async def store_and_broadcast(msg: dict):
     with _lock:
         STATE["messages"].append(msg)
         del STATE["messages"][:-MAX_KEEP]
-        try:
-            with open(HISTORY_PATH, "a", encoding="utf-8") as f:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
+    queue_line(HISTORY_PATH, json.dumps(msg, ensure_ascii=False))
     await broadcast_ui({"type": "msg", "message": msg})
 
 
@@ -258,19 +389,17 @@ async def send_to_devices(payload: dict, target_id=None, exclude_id=None):
             continue
         if exclude_id and info["id"] == exclude_id:
             continue
-        try:
-            await d.send_str(data)
-        except Exception:
+        if not await _send_text(d, data):
             STATE["devices"].pop(d, None)
+            with contextlib.suppress(Exception):
+                await d.close()
 
 
 async def broadcast_device_roster():
     infos = list(STATE["devices"].values())
     for ws, current in list(STATE["devices"].items()):
         peers = [d for d in infos if d["id"] != current["id"]]
-        try:
-            await ws.send_str(json.dumps({"type": "peers", "devices": peers}, ensure_ascii=False))
-        except Exception:
+        if not await _send_payload(ws, {"type": "peers", "devices": peers}):
             STATE["devices"].pop(ws, None)
 
 
@@ -463,7 +592,7 @@ async def api_messages(request):
 
 async def api_history(request):
     """手机端拉取历史(带配对码鉴权),用于断线期间的消息补齐"""
-    if request.query.get("token", "") != CFG["token"]:
+    if not token_ok(request.query.get("token", "")):
         return web.json_response({"error": "unauthorized"}, status=401)
     try:
         limit = min(max(int(request.query.get("limit", "200")), 1), MAX_KEEP)
@@ -505,11 +634,22 @@ async def api_send(request):
     return web.json_response({"ok": True})
 
 
-def _new_transfer_token(transfer_id, purpose, ttl=900):
+def _sweep_transfer_tokens():
     now = time.time()
-    for old, info in list(TRANSFER_TOKENS.items()):
+    for key, info in list(TRANSFER_TOKENS.items()):
         if info["expires"] < now:
-            TRANSFER_TOKENS.pop(old, None)
+            TRANSFER_TOKENS.pop(key, None)
+    if len(TRANSFER_TOKENS) > MAX_TRANSFER_TOKENS:
+        ordered = sorted(TRANSFER_TOKENS.items(), key=lambda kv: kv[1]["expires"])
+        for key, _ in ordered[: len(TRANSFER_TOKENS) - MAX_TRANSFER_TOKENS]:
+            TRANSFER_TOKENS.pop(key, None)
+
+
+def _new_transfer_token(transfer_id, purpose, ttl=900):
+    """每次签发独立令牌(下载令牌为一次性,多个接收者必须各不相同);
+    过期项与超量项在这里清理,保证内存有界。"""
+    _sweep_transfer_tokens()
+    now = time.time()
     token = secrets.token_urlsafe(24)
     TRANSFER_TOKENS[token] = {
         "id": transfer_id, "purpose": purpose, "expires": now + ttl,
@@ -524,9 +664,7 @@ def transfer_with_download(item):
 
 async def publish_completed_transfer(item):
     for ws in list(STATE["uis"]):
-        try:
-            await ws.send_json(transfer_event("file_complete", transfer_with_download(item)))
-        except Exception:
+        if not await _send_payload(ws, transfer_event("file_complete", transfer_with_download(item))):
             STATE["uis"].discard(ws)
     target = item.get("targetDeviceId")
     for ws, info in list(STATE["devices"].items()):
@@ -534,9 +672,7 @@ async def publish_completed_transfer(item):
             continue
         if item.get("direction") != "pc_to_phone" and info["id"] == item.get("fromDeviceId"):
             continue
-        try:
-            await ws.send_json(transfer_event("file_offer", transfer_with_download(item)))
-        except Exception:
+        if not await _send_payload(ws, transfer_event("file_offer", transfer_with_download(item))):
             STATE["devices"].pop(ws, None)
 
 
@@ -549,8 +685,14 @@ def _check_transfer_token(request, transfer_id, purpose, consume=False):
         TRANSFER_TOKENS.pop(token, None)
 
 
+def token_ok(given):
+    """配对码比较使用常量时间比较,避免时序侧信道"""
+    expected = str(CFG.get("token") or "")
+    return bool(expected) and isinstance(given, str) and hmac.compare_digest(given, expected)
+
+
 async def api_transfer_offer(request):
-    if request.query.get("token", "") != CFG.get("token"):
+    if not token_ok(request.query.get("token", "")):
         raise web.HTTPUnauthorized(text="invalid pairing token")
     try:
         data = await request.json()
@@ -560,14 +702,20 @@ async def api_transfer_offer(request):
         return web.json_response({"error": "invalid transfer metadata"}, status=400)
     if size < 0 or size > MAX_FILE_SIZE:
         return web.json_response({"error": "file too large", "max": MAX_FILE_SIZE}, status=413)
+    digest = str(data.get("sha256") or "").strip().lower()
+    if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return web.json_response({"error": "invalid sha256"}, status=400)
+    direction = str(data.get("direction") or "pc_to_phone")
+    if direction not in {"pc_to_phone", "phone_to_pc"}:
+        return web.json_response({"error": "invalid direction"}, status=400)
     transfer_id = uuid.uuid4().hex
     item = {
         "id": transfer_id, "name": name, "size": size,
         "mime": str(data.get("mime") or "application/octet-stream")[:120],
-        "sha256": str(data.get("sha256") or "").lower(),
-        "direction": str(data.get("direction") or "pc_to_phone"),
-        "fromDeviceId": str(data.get("fromDeviceId") or "pc"),
-        "targetDeviceId": str(data.get("targetDeviceId") or ""),
+        "sha256": digest,
+        "direction": direction,
+        "fromDeviceId": str(data.get("fromDeviceId") or "pc")[:80],
+        "targetDeviceId": str(data.get("targetDeviceId") or "")[:80],
         "status": "offered", "progress": 0, "created": int(time.time() * 1000),
     }
     upload_token = _new_transfer_token(transfer_id, "upload")
@@ -624,7 +772,7 @@ async def api_transfer_upload(request):
                     stem, ext = os.path.splitext(safe_name)
                     dest = _safe(os.path.join("transfers", "received", f"{stem}-{i}{ext}"), BASE)
                     i += 1
-                shutil.copyfile(path, dest)
+                await asyncio.to_thread(shutil.copyfile, path, dest)
                 item["savedAs"] = os.path.relpath(dest, BASE)
             except Exception as e:
                 log(f"[文件] 原名另存失败: {e}")
@@ -664,8 +812,11 @@ async def api_transfer_download(request):
     })
 
 
+_APP_META_CACHE = {"key": None, "meta": None}
+
+
 def _app_meta():
-    """读取 apk/version.json + APK 文件大小;不存在返回 None"""
+    """读取 apk/version.json + APK 信息;按 mtime/size 缓存,避免每次轮询都全量算 SHA-256"""
     try:
         vpath = _safe(os.path.join("apk", "version.json"), BASE)
         if not os.path.exists(vpath):
@@ -674,19 +825,22 @@ def _app_meta():
             meta = json.load(f)
         apk_name = safe_transfer_name(meta.get("file") or "LinkAssist.apk")
         apk_path = _safe(os.path.join("apk", apk_name), BASE)
-        if not os.path.exists(apk_path):
-            return None
-        meta["size"] = os.path.getsize(apk_path)
+        stat = os.stat(apk_path)
+        cache_key = (apk_path, stat.st_mtime_ns, stat.st_size)
+        if _APP_META_CACHE["key"] == cache_key and _APP_META_CACHE["meta"]:
+            return dict(_APP_META_CACHE["meta"])
+        meta["size"] = stat.st_size
         meta["path"] = apk_path
         with open(apk_path, "rb") as apk:
             meta["sha256"] = hashlib.file_digest(apk, "sha256").hexdigest()
+        _APP_META_CACHE.update(key=cache_key, meta=dict(meta))
         return meta
     except Exception:
         return None
 
 
 async def api_app_version(request):
-    if request.query.get("token", "") != CFG.get("token"):
+    if not token_ok(request.query.get("token", "")):
         raise web.HTTPUnauthorized(text="invalid pairing token")
     meta = await asyncio.to_thread(_app_meta)
     if not meta:
@@ -700,7 +854,7 @@ async def api_app_version(request):
 
 
 async def api_app_download(request):
-    if request.query.get("token", "") != CFG.get("token"):
+    if not token_ok(request.query.get("token", "")):
         raise web.HTTPUnauthorized(text="invalid pairing token")
     meta = await asyncio.to_thread(_app_meta)
     if not meta:
@@ -712,7 +866,7 @@ async def api_app_download(request):
 
 async def api_received(request):
     """消息里图片/视频的在线预览:按原文件名读取 received 目录"""
-    if request.query.get("token", "") != CFG.get("token"):
+    if not token_ok(request.query.get("token", "")):
         raise web.HTTPUnauthorized(text="invalid pairing token")
     try:
         name = safe_transfer_name(request.match_info["name"])
@@ -728,7 +882,7 @@ async def api_received(request):
 
 
 async def api_transfers(request):
-    if request.query.get("token", "") != CFG.get("token"):
+    if not token_ok(request.query.get("token", "")):
         raise web.HTTPUnauthorized(text="invalid pairing token")
     items = []
     for saved in sorted(TRANSFERS.values(), key=lambda x: x.get("created", 0), reverse=True):
@@ -741,7 +895,7 @@ async def api_transfers(request):
 
 
 async def api_transfer_cancel(request):
-    if request.query.get("token", "") != CFG.get("token"):
+    if not token_ok(request.query.get("token", "")):
         raise web.HTTPUnauthorized(text="invalid pairing token")
     item = transfer_or_404(request.match_info["id"])
     if item.get("status") == "complete":
@@ -757,9 +911,11 @@ async def api_transfer_cancel(request):
 
 async def ws_device(request):
     """手机端连接入口,需携带配对码"""
-    if request.query.get("token", "") != CFG["token"]:
+    if not token_ok(request.query.get("token", "")):
         return web.Response(status=401, text="invalid token")
-    wsr = web.WebSocketResponse(heartbeat=25)
+    if len(STATE["devices"]) >= MAX_DEVICES:
+        return web.Response(status=429, text="too many devices")
+    wsr = web.WebSocketResponse(heartbeat=25, max_msg_size=1024 * 1024)
     await wsr.prepare(request)
     fallback_id = uuid.uuid4().hex
     STATE["devices"][wsr] = {"id": fallback_id, "name": "手机"}
@@ -774,54 +930,66 @@ async def ws_device(request):
                 continue
             try:
                 data = json.loads(m.data)
-            except Exception:
-                continue
-            t = data.get("type")
-            ts = int(time.time() * 1000)
-            source = STATE["devices"].get(wsr, {"id": fallback_id, "name": "手机"})
-            if t == "hello":
-                STATE["devices"][wsr] = {
-                    "id": str(data.get("deviceId") or fallback_id)[:80],
-                    "name": str(data.get("device") or "手机")[:80],
-                }
-                await broadcast_ui(status_payload())
-                await broadcast_device_roster()
-            elif t == "sms":
-                msg = {"id": next_id(), "type": "sms", "direction": "in",
-                       "from": str(data.get("from") or "未知号码"),
-                       "body": str(data.get("body") or ""),
-                       "code": data.get("code"),
-                       "ts": int(data.get("ts") or ts),
-                       "fromDeviceId": source["id"], "fromDevice": source["name"]}
-                await store_and_broadcast(msg)
-            elif t == "notif":
-                msg = {"id": next_id(), "type": "notif", "direction": "in",
-                       "app": str(data.get("app") or ""),
-                       "title": str(data.get("title") or ""),
-                       "body": str(data.get("body") or ""),
-                       "code": data.get("code"),
-                       "ts": int(data.get("ts") or ts),
-                       "fromDeviceId": source["id"], "fromDevice": source["name"]}
-                await store_and_broadcast(msg)
-            elif t == "chat":
-                target_id = str(data.get("targetDeviceId") or "")
-                file_name = str(data.get("fileName") or "")
-                orig_ts = int(data.get("ts") or ts)
-                msg = {"id": next_id(), "type": "chat", "direction": "in",
-                       "from": source["name"], "fromDeviceId": source["id"],
-                       "targetDeviceId": target_id,
-                       "text": str(data.get("text") or ""),
-                       "fileName": file_name,
-                       "ts": orig_ts}
-                await store_and_broadcast(msg)
-                forward = {"type": "chat", "text": msg["text"], "ts": orig_ts,
+                if not isinstance(data, dict):
+                    continue
+                t = data.get("type")
+                ts = int(time.time() * 1000)
+                source = STATE["devices"].get(wsr, {"id": fallback_id, "name": "手机"})
+                if t == "hello":
+                    device_id = str(data.get("deviceId") or fallback_id)[:80]
+                    # 同一设备重复连接(重连/换网):关掉旧连接,避免同一 id 双份路由
+                    for other, info in list(STATE["devices"].items()):
+                        if other is not wsr and info.get("id") == device_id:
+                            STATE["devices"].pop(other, None)
+                            with contextlib.suppress(Exception):
+                                await other.close(code=4001, message=b"replaced by new connection")
+                    STATE["devices"][wsr] = {
+                        "id": device_id,
+                        "name": str(data.get("device") or "手机")[:80],
+                    }
+                    await broadcast_ui(status_payload())
+                    await broadcast_device_roster()
+                elif t == "sms":
+                    msg = {"id": next_id(), "type": "sms", "direction": "in",
+                           "from": str(data.get("from") or "未知号码")[:80],
+                           "body": str(data.get("body") or "")[:8000],
+                           "code": None if data.get("code") is None else str(data.get("code"))[:24],
+                           "ts": _coerce_ts(data.get("ts"), ts),
+                           "fromDeviceId": source["id"], "fromDevice": source["name"]}
+                    await store_and_broadcast(msg)
+                elif t == "notif":
+                    msg = {"id": next_id(), "type": "notif", "direction": "in",
+                           "app": str(data.get("app") or "")[:80],
+                           "title": str(data.get("title") or "")[:200],
+                           "body": str(data.get("body") or "")[:8000],
+                           "code": None if data.get("code") is None else str(data.get("code"))[:24],
+                           "ts": _coerce_ts(data.get("ts"), ts),
+                           "fromDeviceId": source["id"], "fromDevice": source["name"]}
+                    await store_and_broadcast(msg)
+                elif t == "chat":
+                    text = str(data.get("text") or "")[:16000]
+                    target_id = str(data.get("targetDeviceId") or "")[:80]
+                    file_name = str(data.get("fileName") or "")[:200]
+                    orig_ts = _coerce_ts(data.get("ts"), ts)
+                    msg = {"id": next_id(), "type": "chat", "direction": "in",
                            "from": source["name"], "fromDeviceId": source["id"],
-                           "fileName": file_name}
-                if target_id:
-                    await send_to_devices(forward, target_id=target_id)
-                else:
-                    # 无定向目标:广播给除发送者外的所有设备(手机↔手机互通)
-                    await send_to_devices(forward, exclude_id=source["id"])
+                           "targetDeviceId": target_id,
+                           "text": text,
+                           "fileName": file_name,
+                           "ts": orig_ts}
+                    await store_and_broadcast(msg)
+                    forward = {"type": "chat", "text": text, "ts": orig_ts,
+                               "from": source["name"], "fromDeviceId": source["id"],
+                               "fileName": file_name}
+                    if target_id:
+                        await send_to_devices(forward, target_id=target_id)
+                    else:
+                        # 无定向目标:广播给除发送者外的所有设备(手机↔手机互通)
+                        await send_to_devices(forward, exclude_id=source["id"])
+            except Exception as exc:
+                # 单条脏数据不应踢掉设备连接
+                log(f"[手机] 忽略无法处理的消息: {type(exc).__name__}: {exc}")
+                continue
     finally:
         STATE["devices"].pop(wsr, None)
         log("[手机] 已断开")
@@ -859,13 +1027,13 @@ async def ws_ui(request):
             if not isinstance(data, dict):
                 continue
             if data.get("type") == "chat":
-                text = str(data.get("text") or "").strip()
-                target = str(data.get("targetDeviceId") or "")
+                text = str(data.get("text") or "").strip()[:16000]
+                target = str(data.get("targetDeviceId") or "")[:80]
                 if not text or len(text) > 16000:
-                    await wsr.send_json({"type": "error", "error": "消息不能为空且不能超过 16000 字"})
+                    await _send_payload(wsr, {"type": "error", "error": "消息不能为空且不能超过 16000 字"})
                     continue
                 if not STATE["devices"] or (target and not any(d["id"] == target for d in STATE["devices"].values())):
-                    await wsr.send_json({"type": "error", "error": "目标设备已离线，消息未发送"})
+                    await _send_payload(wsr, {"type": "error", "error": "目标设备已离线，消息未发送"})
                     continue
                 msg = {"id": next_id(), "type": "chat", "direction": "out",
                        "from": "电脑", "text": text, "targetDeviceId": target, "ts": int(time.time() * 1000)}
@@ -911,20 +1079,42 @@ def discovery_loop(ip):
 
 
 # ---------------------------------------------------------------- 应用
+async def storage_lifecycle(app):
+    """启动后台写盘任务;退出时把队列里剩余记录刷完再收尾"""
+    global WRITE_QUEUE, WRITER_TASK
+    WRITE_QUEUE = asyncio.Queue(maxsize=WRITE_QUEUE_MAX)
+    WRITER_TASK = asyncio.create_task(_writer_loop())
+    try:
+        yield
+    finally:
+        if WRITER_TASK is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(WRITE_QUEUE.join(), timeout=3)
+            WRITER_TASK.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await WRITER_TASK
+            WRITER_TASK = None
+            WRITE_QUEUE = None
+
+
 async def update_lifecycle(app):
     task = asyncio.create_task(app[UPDATE_CHECKER_KEY].periodic())
-    yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-    for ws in list(STATE["uis"]) + list(STATE["devices"]):
-        await ws.close()
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        for ws in list(STATE["uis"]) + list(STATE["devices"]):
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(ws.close(), 2)
 
 
 def create_app(auto_updates=True) -> web.Application:
     app = web.Application(middlewares=[control_access])
     app[UPDATE_CHECKER_KEY] = UpdateChecker(CFG, broadcast_ui)
     app.on_response_prepare.append(response_headers)
+    app.cleanup_ctx.append(storage_lifecycle)
     if auto_updates:
         app.cleanup_ctx.append(update_lifecycle)
     app.router.add_get("/", index)

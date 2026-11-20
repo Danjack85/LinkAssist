@@ -14,8 +14,8 @@ android {
         applicationId = "com.linkassist.app"
         minSdk = 23
         targetSdk = 35
-        versionCode = 19
-        versionName = "3.0.7"
+        versionCode = 20
+        versionName = "3.1.0"
     }
 
     val signingFile = providers.environmentVariable("LINKASSIST_KEYSTORE_FILE").orNull

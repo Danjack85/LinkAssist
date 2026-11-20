@@ -73,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -100,6 +101,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -113,6 +115,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Smartphone
@@ -145,20 +148,21 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
-// ---------- 青绿 / 石墨主题 ----------
-private val Bg = Color(0xFF101716)
-private val CardBg = Color(0xFF192321)
-private val CardBg2 = Color(0xFF23332F)
-private val CodeBg = Color(0xFF111C19)
-private val Muted = Color(0xFFA8BBB5)
-private val Faint = Color(0xFF8BA39A)
-private val Line = Color(0xFF30443D)
-private val Accent = Color(0xFF56D6BC)
-private val Accent2 = Color(0xFF89D7B2)
-private val BubbleOutBrush = Brush.horizontalGradient(listOf(Color(0xFF18604F), Color(0xFF1E7064)))
-private val Green = Color(0xFF76DEAE)
-private val Orange = Color(0xFFE9C17A)
+// ---------- 墨玉主题：更深的底色、更柔和的层次、青玉强调色 ----------
+private val Bg = Color(0xFF0B1110)
+private val CardBg = Color(0xFF141D1B)
+private val CardBg2 = Color(0xFF1B2725)
+private val CodeBg = Color(0xFF0F1817)
+private val Muted = Color(0xFFA3B8B2)
+private val Faint = Color(0xFF7E948E)
+private val Line = Color(0xFF283734)
+private val Accent = Color(0xFF46D6B5)
+private val Accent2 = Color(0xFF93E9CB)
+private val BubbleOutBrush = Brush.linearGradient(listOf(Color(0xFF14705E), Color(0xFF0F5B4E)))
+private val Green = Color(0xFF72E0B4)
+private val Orange = Color(0xFFEBC37C)
 private val Red = Color(0xFFFF9A95)
+private val Ink = Color(0xFF051512)
 
 class MainActivity : ComponentActivity() {
     private var settingsRequest by mutableStateOf(0)
@@ -321,6 +325,9 @@ fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
             LinkService.onMediaSaved = {
                 Handler(Looper.getMainLooper()).post { fileTick++ }
             }
+            // 历史在后台线程异步加载:界面挂载后补一次快照,避免加载完成前丢失显示
+            msgs.clear(); msgs.addAll(LinkService.messages)
+            transfers.clear(); transfers.addAll(LinkService.transfers)
             onDispose {
                 LinkService.onEvent = null
                 LinkService.onStatus = null
@@ -336,22 +343,45 @@ fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
         Scaffold(
             containerColor = Bg,
             bottomBar = {
-                NavigationBar(containerColor = CardBg, contentColor = Muted, tonalElevation = 0.dp) {
-                    val items = listOf("消息", "文件", "设备", "设置")
-                    val icons = listOf(Icons.Outlined.ChatBubbleOutline, Icons.Outlined.FolderOpen,
-                        Icons.Outlined.Devices, Icons.Outlined.Settings)
-                    items.forEachIndexed { i, label ->
-                        NavigationBarItem(
-                            selected = tab == i,
-                            onClick = { tab = i },
-                            label = { Text(label, fontSize = 12.sp) },
-                            icon = { Icon(icons[i], contentDescription = label, modifier = Modifier.size(23.dp)) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedTextColor = Accent,
-                                selectedIconColor = Accent,
-                                indicatorColor = Accent.copy(alpha = 0.14f),
-                            ),
+                Surface(color = Bg) {
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 10.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(CardBg)
+                            .padding(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val items = listOf(
+                            "消息" to Icons.Outlined.ChatBubbleOutline,
+                            "文件" to Icons.Outlined.FolderOpen,
+                            "设备" to Icons.Outlined.Devices,
+                            "设置" to Icons.Outlined.Settings,
                         )
+                        items.forEachIndexed { i, (label, icon) ->
+                            val selected = tab == i
+                            Row(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(if (selected) Accent.copy(alpha = 0.13f) else Color.Transparent)
+                                    .clickable { tab = i }
+                                    .padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    icon, contentDescription = label,
+                                    tint = if (selected) Accent else Faint,
+                                    modifier = Modifier.size(21.dp),
+                                )
+                                if (selected) {
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(label, fontSize = 12.5.sp, color = Accent, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -362,26 +392,26 @@ fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
                     .background(Bg)
                     .padding(pad),
             ) {
-                // ---------- 顶栏 ----------
+                // ---------- 顶栏：品牌 + 实时状态 + 重连 ----------
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
-                        Modifier.size(40.dp)
-                            .background(Brush.linearGradient(listOf(Accent, Accent2)), RoundedCornerShape(12.dp)),
+                        Modifier.size(42.dp)
+                            .background(Brush.linearGradient(listOf(Accent2, Accent)), RoundedCornerShape(14.dp)),
                         contentAlignment = Alignment.Center,
-                    ) { Icon(Icons.Outlined.Link, contentDescription = null, tint = CodeBg, modifier = Modifier.size(24.dp)) }
-                    Spacer(Modifier.width(10.dp))
+                    ) { Icon(Icons.Outlined.Link, contentDescription = null, tint = Ink, modifier = Modifier.size(23.dp)) }
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("互传助手", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(Modifier.height(2.dp))
+                        Text("互传助手", fontWeight = FontWeight.Bold, fontSize = 17.sp, letterSpacing = 0.3.sp)
+                        Spacer(Modifier.height(3.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 Modifier.size(7.dp)
                                     .background(if (connected || hubPeers > 0) Green else Faint, CircleShape),
                             )
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(7.dp))
                             Text(
                                 when {
                                     hubPeers > 0 -> "手机互连 · $hubPeers 台在线"
@@ -392,8 +422,17 @@ fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
                             )
                         }
                     }
+                    if (profiles.isNotEmpty()) {
+                        IconButton(onClick = { LinkService.reconnect() }) {
+                            Icon(
+                                Icons.Outlined.Refresh,
+                                contentDescription = "重新连接所有设备",
+                                tint = if (connected) Faint else Accent,
+                                modifier = Modifier.size(21.dp),
+                            )
+                        }
+                    }
                 }
-                HorizontalDivider(color = Line)
 
                 when (tab) {
                     0 -> MessagesPage(
@@ -564,25 +603,37 @@ fun MessagesPage(
 
         HorizontalDivider(color = Line)
 
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom) {
-            IconButton(onClick = onPickMedia, enabled = online) {
-                Icon(Icons.Outlined.Image, contentDescription = "发送图片或视频", tint = if (online) Accent else Faint)
+        Surface(color = CardBg, border = androidx.compose.foundation.BorderStroke(1.dp, Line)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                IconButton(onClick = onPickMedia, enabled = online) {
+                    Icon(Icons.Outlined.Image, contentDescription = "发送图片或视频", tint = if (online) Accent else Faint)
+                }
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInput,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("输入消息…", color = Faint, fontSize = 14.sp) },
+                    maxLines = 3,
+                    shape = RoundedCornerShape(18.dp),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = CardBg2,
+                        unfocusedContainerColor = CardBg2,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = Accent,
+                    ),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = onSend,
+                    enabled = online && input.isNotBlank(),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                ) { Text("发送", fontSize = 13.sp) }
             }
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInput,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("输入消息…", color = Faint, fontSize = 14.sp) },
-                maxLines = 3,
-                shape = RoundedCornerShape(14.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onSend,
-                enabled = online && input.isNotBlank(),
-                shape = RoundedCornerShape(14.dp),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
-            ) { Text("发送") }
         }
 
         // 图片全屏查看
@@ -1674,12 +1725,13 @@ fun ChatBubble(m: Msg, fileMap: Map<String, ReceivedFile>, onZoom: (ReceivedFile
         Spacer(Modifier.height(2.dp))
         Surface(
             shape = RoundedCornerShape(
-                topStart = 16.dp, topEnd = 16.dp,
-                bottomStart = if (out) 16.dp else 5.dp,
-                bottomEnd = if (out) 5.dp else 16.dp,
+                topStart = 18.dp, topEnd = 18.dp,
+                bottomStart = if (out) 18.dp else 5.dp,
+                bottomEnd = if (out) 5.dp else 18.dp,
             ),
             color = Color.Transparent,
-            modifier = Modifier.widthIn(max = 320.dp)
+            border = if (out) null else androidx.compose.foundation.BorderStroke(1.dp, Line),
+            modifier = Modifier.widthIn(max = 318.dp)
                 .combinedClickable(
                     onClick = {
                         clipboard.setText(AnnotatedString(m.body))
@@ -1695,20 +1747,18 @@ fun ChatBubble(m: Msg, fileMap: Map<String, ReceivedFile>, onZoom: (ReceivedFile
                 Modifier.then(
                     if (out) Modifier.background(BubbleOutBrush)
                     else Modifier.background(CardBg)
-                ).padding(6.dp),
+                ).padding(horizontal = 13.dp, vertical = 10.dp),
             ) {
                 val fname = m.fileName
+                val textColor = if (out) Color(0xFFF0FFFB) else Color(0xFFE6F0ED)
                 if (fname != null) {
-                    MediaContent(fname, fileMap, textColor = if (out) Color.White else Color(0xFFE6EAF4),
-                        onZoom = onZoom)
+                    MediaContent(fname, fileMap, textColor = textColor, onZoom = onZoom)
                     if (m.body.isNotBlank() && m.body != "[图片] $fname" && m.body != "[视频] $fname") {
                         Spacer(Modifier.height(6.dp))
-                        Text(m.body, fontSize = 14.sp, lineHeight = 20.sp,
-                            color = if (out) Color.White else Color(0xFFE6EAF4))
+                        Text(m.body, fontSize = 14.sp, lineHeight = 21.sp, color = textColor)
                     }
                 } else {
-                    Text(m.body, fontSize = 14.sp, lineHeight = 20.sp,
-                        color = if (out) Color.White else Color(0xFFE6EAF4))
+                    Text(m.body, fontSize = 14.sp, lineHeight = 21.sp, color = textColor)
                 }
             }
         }
@@ -1852,7 +1902,8 @@ fun EventCard(m: Msg) {
     val tint = if (isSms) Green else Orange
     Card(
         colors = CardDefaults.cardColors(containerColor = CardBg),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Line),
         modifier = Modifier.fillMaxWidth().combinedClickable(
             onClick = {},
             onLongClick = {
@@ -1861,11 +1912,16 @@ fun EventCard(m: Msg) {
             },
         ),
     ) {
-        Row(Modifier.padding(12.dp)) {
+        Row(Modifier.padding(13.dp)) {
             Box(
-                Modifier.size(38.dp).background(tint.copy(alpha = 0.14f), RoundedCornerShape(12.dp)),
+                Modifier.size(38.dp).background(tint.copy(alpha = 0.13f), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
-            ) { Text(if (isSms) "✉️" else "🔔", fontSize = 17.sp) }
+            ) {
+                Icon(
+                    if (isSms) Icons.Outlined.Sms else Icons.Outlined.NotificationsNone,
+                    contentDescription = null, tint = tint, modifier = Modifier.size(18.dp),
+                )
+            }
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1913,7 +1969,7 @@ fun EventCard(m: Msg) {
                             fontFamily = FontFamily.Monospace,
                             fontSize = 22.sp, fontWeight = FontWeight.Bold,
                             style = androidx.compose.ui.text.TextStyle(
-                                brush = Brush.horizontalGradient(listOf(Color(0xFF6EA8FF), Color(0xFFA78BFF))),
+                                brush = Brush.horizontalGradient(listOf(Accent2, Accent)),
                             ),
                         )
                         Spacer(Modifier.weight(1f))
@@ -1928,13 +1984,24 @@ fun EventCard(m: Msg) {
 @Composable
 fun EmptyHint() {
     Column(
-        Modifier.fillMaxWidth().padding(vertical = 60.dp),
+        Modifier.fillMaxWidth().padding(vertical = 64.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("📨", fontSize = 38.sp)
-        Spacer(Modifier.height(10.dp))
-        Text("暂无消息", color = Muted, fontSize = 14.sp)
-        Text("手机收到验证码会自动转发到电脑", color = Faint, fontSize = 12.sp)
+        Box(
+            Modifier.size(56.dp)
+                .background(Accent.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
+                .then(Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.ChatBubbleOutline, contentDescription = null,
+                tint = Accent.copy(alpha = 0.75f), modifier = Modifier.size(26.dp),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("还没有消息", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(3.dp))
+        Text("扫码连接后，聊天与验证码会出现在这里", color = Faint, fontSize = 12.sp)
     }
 }
 

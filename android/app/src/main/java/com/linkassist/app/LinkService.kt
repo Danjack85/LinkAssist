@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
@@ -46,12 +47,18 @@ private class Conn(
     var token: String,
     val localHub: Boolean = false,
 ) {
-    var ws: WebSocket? = null
-    var connecting = false
-    var backoff = 1000L
-    var connected = false
-    var status = "未连接"
-    var failCount = 0
+    @Volatile var ws: WebSocket? = null
+    @Volatile var connecting = false
+    @Volatile var backoff = 1000L
+    @Volatile var connected = false
+    @Volatile var status = "未连接"
+    @Volatile var failCount = 0
+    /** 401 等永久性失败:停止重试,等用户重新配对 */
+    @Volatile var authFailed = false
+    /** 已排队的重连任务;关闭/改配置时需要取消,避免重复拨号 */
+    var retryTask: Runnable? = null
+    /** 最近一次收到服务端数据的时间(用于半开连接判断) */
+    @Volatile var lastInboundAt = 0L
     /** 该服务器最近一次名册里提供的设备 id(断开时回收,避免跨服务器名册互相污染) */
     val contributedPeers = CopyOnWriteArrayList<String>()
     val peerNames = ConcurrentHashMap<String, String>()
@@ -217,7 +224,7 @@ class LinkService : Service() {
         /** 在手机本地界面留一条记录(如刚转发的验证码) */
         fun addLocal(m: Msg) {
             val m2 = if (m.key == null) m.copy(key = "local:${m.id}") else m
-            seenKeys.add(m2.key!!)
+            rememberKeyIfNew(m2.key!!)
             messages.add(m2)
             trimMessages()
             instance?.persist(m2)
@@ -271,20 +278,49 @@ class LinkService : Service() {
         private fun trimMessages() {
             while (messages.size > MAX_MSGS) messages.removeAt(0)
         }
+
+        /** 去重键有界:超过阈值时只保留当前仍显示的消息键,避免长期运行无限增长 */
+        private fun trimSeenKeysIfNeeded() {
+            if (seenKeys.size <= 2000) return
+            val keep = messages.mapNotNull { it.key }.toHashSet()
+            seenKeys.retainAll(keep)
+            if (seenKeys.size > 2500) seenKeys.clear()
+        }
+
+        fun rememberKeyIfNew(key: String): Boolean {
+            if (key.isBlank()) return false
+            val added = synchronized(seenKeys) { seenKeys.add(key) }
+            if (added) synchronized(seenKeys) { trimSeenKeysIfNeeded() }
+            return added
+        }
     }
 
+    // WS 专用:依靠 ping 检测半开连接,readTimeout=0 避免空闲被误杀
     private val client = OkHttpClient.Builder()
-        .pingInterval(10, TimeUnit.SECONDS)
-        .connectTimeout(6, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
         .followRedirects(false)
         .followSslRedirects(false)
         .retryOnConnectionFailure(true)
         .build()
+    // 普通 HTTP(历史/版本等):必须有总时长上限,避免请求悬挂
+    private val httpClient = client.newBuilder()
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
+        .build()
+    // 文件传输:不设总时长(大文件需要时间),只限制连接与单次读写停滞
     private val transferClient = client.newBuilder()
         .retryOnConnectionFailure(false)
-        .callTimeout(10, TimeUnit.MINUTES)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS)
         .build()
+    /** 单线程落盘,避免在主线程做文件 IO */
+    private val fileExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "linkassist-persist").apply { isDaemon = true }
+    }
     private val transferCalls = ConcurrentHashMap<String, okhttp3.Call>()
     private val downloadPublishLock = Any()
     private val transferConnections = ConcurrentHashMap<String, Conn>()
@@ -315,10 +351,11 @@ class LinkService : Service() {
         instance = this
         myDeviceId = deviceId()
         createChannels()
-        loadPersisted()
+        // 先满足前台服务 5 秒期限,再异步读取历史(避免大文件导致 FGS 超时)
         startForegroundNotify()
         registerNetworkCallback()
         handler.postDelayed(watchdog, 30_000)
+        Thread({ loadPersisted() }, "history-load").start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -481,6 +518,12 @@ class LinkService : Service() {
                 exist.host = p.host
                 exist.port = p.port
                 exist.token = p.token
+                if (changed) {
+                    // 用户改了地址/配对码:清除"配对失效"标记并重新开始
+                    exist.authFailed = false
+                    exist.failCount = 0
+                    exist.backoff = 1000L
+                }
                 for (i in profileStates.indices) {
                     val s = profileStates[i]
                     if (s.id == p.id) profileStates[i] = ProfileState(p.id, p.name, p.host, p.port, s.connected, s.status)
@@ -498,6 +541,8 @@ class LinkService : Service() {
     private fun closeConn(pc: Conn) {
         pc.connected = false
         pc.connecting = false
+        pc.retryTask?.let { handler.removeCallbacks(it) }
+        pc.retryTask = null
         val w = pc.ws
         pc.ws = null
         // 回收该服务器贡献的定向发送名册
@@ -543,6 +588,8 @@ class LinkService : Service() {
                     pc.connecting = false
                     pc.backoff = 1000L
                     pc.failCount = 0
+                    pc.authFailed = false
+                    pc.lastInboundAt = System.currentTimeMillis()
                     setProfileStatus(pc, true, "已连接")
                     w.send(JSONObject().apply {
                         put("type", "hello")
@@ -556,6 +603,7 @@ class LinkService : Service() {
 
             override fun onMessage(w: WebSocket, text: String) {
                 // 丢弃旧连接的尾部事件，避免一次性下载在重连时重复触发。
+                pc.lastInboundAt = System.currentTimeMillis()
                 handler.post { if (w === pc.ws) handleIncoming(pc, text) }
             }
 
@@ -563,9 +611,17 @@ class LinkService : Service() {
                 handler.post {
                     if (w !== pc.ws) return@post   // 过期回调,忽略(新连接可能已在跑)
                     pc.connecting = false
+                    if (response?.code == 401) {
+                        // 配对码被改过或已失效:继续重试没有意义,停止并提示重新配对
+                        pc.authFailed = true
+                        pc.ws = null
+                        pc.retryTask?.let { handler.removeCallbacks(it) }
+                        pc.retryTask = null
+                        setProfileStatus(pc, false, "配对码已失效，请重新扫码配对")
+                        return@post
+                    }
                     val raw = t.message ?: "未知错误"
                     val msg = when {
-                        response?.code == 401 -> "配对码错误(401)"
                         raw.contains("Unable to resolve host", true) -> "地址无法解析(检查 IP)"
                         raw.contains("timeout", true) -> "连接超时"
                         raw.contains("ECONNREFUSED", true) -> "对方未在线或端口不对"
@@ -591,10 +647,22 @@ class LinkService : Service() {
         setProfileStatus(pc, false, reason)
         pc.ws = null
         if (!shouldRun) return
+        if (pc.authFailed) {
+            setProfileStatus(pc, false, "配对码已失效，请重新扫码配对")
+            return
+        }
         pc.failCount++
-        val delay = pc.backoff
-        handler.postDelayed({ connectProfile(pc.id) }, delay)
-        pc.backoff = (pc.backoff * 2).coerceAtMost(15_000)
+        // 取消尚未执行的重连,避免多次失败叠加出重复拨号
+        pc.retryTask?.let { handler.removeCallbacks(it) }
+        val jitter = 0.6 + java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 0.8
+        val delay = (pc.backoff * jitter).toLong().coerceIn(400L, 20_000L)
+        val task = Runnable {
+            pc.retryTask = null
+            if (shouldRun && conns[pc.id] === pc) connectProfile(pc.id)
+        }
+        pc.retryTask = task
+        handler.postDelayed(task, delay)
+        pc.backoff = (pc.backoff * 2).coerceAtMost(20_000L)
         // 连续失败(端口可能因被占用而漂移):自动 UDP 发现,跟随电脑的实际端口
         if (pc.failCount >= 3 && !pc.localHub) tryAutoDiscoverPort(pc)
     }
@@ -676,7 +744,37 @@ class LinkService : Service() {
                         for (pc in conns.values) {
                             if (!pc.connected && !pc.connecting && pc.ws == null) {
                                 pc.backoff = 1000L
+                                pc.authFailed = false
                                 connectProfile(pc.id)
+                            }
+                        }
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    // 网络断开:立即反映到界面,取消挂起重连,等网络恢复后由 onAvailable 补拨
+                    handler.post {
+                        val cm = getSystemService(ConnectivityManager::class.java)
+                        val active = cm?.activeNetwork
+                        val caps = active?.let { cm.getNetworkCapabilities(it) }
+                        val stillOnline = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                        if (stillOnline) return@post
+                        for (pc in conns.values) {
+                            pc.retryTask?.let { handler.removeCallbacks(it) }
+                            pc.retryTask = null
+                            closeConn(pc)
+                            setProfileStatus(pc, false, "网络已断开，等待恢复")
+                        }
+                    }
+                }
+
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        handler.post {
+                            for (pc in conns.values) {
+                                if (!pc.connected && !pc.connecting) {
+                                    setProfileStatus(pc, false, "网络不可用，等待恢复")
+                                }
                             }
                         }
                     }
@@ -882,8 +980,7 @@ class LinkService : Service() {
                             // 内容级去重:实时通道已收过的同内容同时间消息不再补一份
                             if (messages.any { it.ts == ts && it.body == body }) continue
                             val key = "${pc.id}:${o.optInt("id")}"
-                            val added = synchronized(seenKeys) { seenKeys.add(key) }
-                            if (!added) continue
+                            if (!rememberKeyIfNew(key)) continue
                         fresh.add(
                             Msg(
                                 Msg.newId(), type, o.optString("direction", "in"),
@@ -915,16 +1012,33 @@ class LinkService : Service() {
 
     // ------------------------------------------------------------ 落盘
     private fun persist(m: Msg) {
+        val line = JSONObject().apply {
+            put("key", m.key ?: "local:${m.id}")
+            put("type", m.type); put("direction", m.direction)
+            put("from", m.from); put("title", m.title); put("body", m.body)
+            put("code", m.code ?: ""); put("ts", m.ts); put("pc", m.pc)
+            put("fileName", m.fileName ?: "")
+        }.toString() + "\n"
+        fileExecutor.execute {
+            try {
+                val f = File(filesDir, HISTORY_FILE)
+                f.appendText(line)
+                if (f.length() > 2L * 1024 * 1024) rotateHistory(f)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** 历史文件超过 2MB 时只保留最近 1000 行,防止无限增长拖慢启动 */
+    private fun rotateHistory(f: File) {
         try {
-            File(filesDir, HISTORY_FILE).appendText(
-                JSONObject().apply {
-                    put("key", m.key ?: "local:${m.id}")
-                    put("type", m.type); put("direction", m.direction)
-                    put("from", m.from); put("title", m.title); put("body", m.body)
-                    put("code", m.code ?: ""); put("ts", m.ts); put("pc", m.pc)
-                    put("fileName", m.fileName ?: "")
-                }.toString() + "\n"
-            )
+            val keep = f.readLines().takeLast(MAX_MSGS * 2)
+            val tmp = File(filesDir, "$HISTORY_FILE.tmp")
+            tmp.writeText(keep.joinToString("\n", postfix = if (keep.isEmpty()) "" else "\n"))
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                tmp.renameTo(f)
+            }
         } catch (_: Exception) {
         }
     }
@@ -933,13 +1047,23 @@ class LinkService : Service() {
         try {
             val f = File(filesDir, HISTORY_FILE)
             if (!f.exists()) return
-            val lines = f.readLines().takeLast(300)
-            for (line in lines) {
+            val maxBytes = 512 * 1024
+            val text = if (f.length() > maxBytes) {
+                java.io.RandomAccessFile(f, "r").use { raf ->
+                    raf.seek(f.length() - maxBytes)
+                    val buf = ByteArray(maxBytes)
+                    val n = raf.read(buf)
+                    String(buf, 0, n, Charsets.UTF_8).substringAfter("\n", "")
+                }
+            } else {
+                f.readText()
+            }
+            val restored = mutableListOf<Msg>()
+            for (line in text.split('\n').takeLast(300)) {
                 try {
                     val o = JSONObject(line)
                     val key = o.optString("key")
-                    if (key.isNotBlank()) seenKeys.add(key)
-                    messages.add(
+                    restored.add(
                         Msg(
                             Msg.newId(), o.optString("type"), o.optString("direction", "in"),
                             o.optString("from"), o.optString("title"), o.optString("body"),
@@ -951,7 +1075,14 @@ class LinkService : Service() {
                 } catch (_: Exception) {
                 }
             }
-            trimMessages()
+            handler.post {
+                for (m in restored) {
+                    val key = m.key
+                    if (key != null && !rememberKeyIfNew(key)) continue
+                    messages.add(m)
+                }
+                trimMessages()
+            }
         } catch (_: Exception) {
         }
     }

@@ -225,14 +225,45 @@ def _notify_tray(message, title="互传助手 LinkAssist"):
         pass
 
 
+def _ui_invoke(win, action):
+    """在窗口自己的 UI 线程执行窗口操作。
+
+    pywebview 的 show()/hide() 直接调用原生控件,从托盘线程或请求线程调用
+    并不安全;这里统一投递到 WinForms 的 UI 线程,失败时再退回直接调用。
+    """
+    form = getattr(win, "native", None)
+    if form is None:
+        try:
+            action()
+            return True
+        except Exception:
+            return False
+    try:
+        import clr  # noqa: F401
+        from System import Action
+        form.Invoke(Action(action))
+        return True
+    except Exception:
+        try:
+            action()
+            return True
+        except Exception:
+            return False
+
+
+def _set_window_visible(win, visible):
+    form = getattr(win, "native", None)
+    if form is not None:
+        return _ui_invoke(win, lambda: (form.Show() if visible else form.Hide()))
+    return _ui_invoke(win, lambda: (win.show() if visible else win.hide()))
+
+
 def _hide_to_tray(announce=True):
     """把主窗口收进托盘,服务与手机连接继续在后台运行"""
     w = panel_win
     if w is None:
         return False
-    try:
-        w.hide()
-    except Exception:
+    if not _set_window_visible(w, False):
         return False
     Api.panel_visible = False
     if announce:
@@ -249,12 +280,10 @@ class Api:
         w = panel_win
         if w is None:
             return False
-        if Api.panel_visible:
-            w.hide()
-            Api.panel_visible = False
-        else:
-            w.show()
-            Api.panel_visible = True
+        target = not Api.panel_visible
+        if not _set_window_visible(w, target):
+            return Api.panel_visible
+        Api.panel_visible = target
         return Api.panel_visible
 
     def request_close(self):
@@ -281,9 +310,7 @@ class Api:
         w = panel_win
         if w is None:
             return False
-        try:
-            w.show()
-        except Exception:
+        if not _set_window_visible(w, True):
             return False
         Api.panel_visible = True
         return True
@@ -292,11 +319,9 @@ class Api:
         """打开/聚焦独立迷你面板(托盘菜单用;悬浮球点击走 toggle_mini)"""
         global mini_win
         if mini_win is not None:
-            try:
-                mini_win.show()
+            if _set_window_visible(mini_win, True):
                 return True
-            except Exception:
-                mini_win = None
+            mini_win = None
         try:
             mini_win = create_mini_window(PORT)
         except Exception as exc:
@@ -312,15 +337,11 @@ class Api:
         """
         w = mini_win
         if w is not None:
-            try:
-                form = getattr(w, "native", None)
-                if form is not None and form.Visible:
-                    w.hide()
-                    return False
-                w.show()
-                return True
-            except Exception:
-                pass   # 窗口状态异常时按新建处理
+            form = getattr(w, "native", None)
+            visible = bool(form is not None and form.Visible)
+            if _set_window_visible(w, not visible):
+                return not visible
+            # 窗口状态异常时按新建处理
         return self.open_mini()
 
     def mini_open(self):
@@ -365,10 +386,7 @@ class Api:
         global mini_win
         w, mini_win = mini_win, None
         if w is not None:
-            try:
-                w.destroy()
-            except Exception:
-                pass
+            _ui_invoke(w, w.destroy)
         return True
 
     def set_ball_enabled(self, enabled):
@@ -398,13 +416,18 @@ class Api:
         return webbrowser.open(url)
 
     def quit_app(self):
+        """退出:先做尽力而为的清理,再结束进程(保留传输中的临时文件由服务端自行清理)"""
+        global mini_win, ball_win, panel_win
+        srv.SHOW_WINDOW = None
         _remove_pid_file()
         stop_tray()
-        try:
-            for w in list(webview.windows):
-                w.destroy()
-        finally:
-            os._exit(0)
+        for w in (mini_win, ball_win, panel_win):
+            if w is not None:
+                _ui_invoke(w, w.destroy)
+        mini_win = ball_win = panel_win = None
+        srv.log("[应用] 正在退出")
+        time.sleep(0.15)          # 给托盘与日志一点收尾时间
+        os._exit(0)
 
 
 api = Api()
@@ -584,10 +607,7 @@ def set_ball_enabled(enabled):
             ball_win = None
     elif not enabled and ball_win is not None:
         w, ball_win = ball_win, None
-        try:
-            w.destroy()
-        except Exception:
-            pass
+        _ui_invoke(w, w.destroy)
     return ball_win is not None
 
 
