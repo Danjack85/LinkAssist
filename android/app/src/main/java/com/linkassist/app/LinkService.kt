@@ -119,6 +119,8 @@ class LinkService : Service() {
         var onCleared: (() -> Unit)? = null
         /** 媒体文件已保存到 Download/LinkAssist(供气泡内联刷新) */
         var onMediaSaved: (() -> Unit)? = null
+        /** 本地历史在后台加载完成(界面据此补一次快照) */
+        var onHistoryLoaded: (() -> Unit)? = null
 
         @Volatile
         var hubRunning = false
@@ -1082,6 +1084,7 @@ class LinkService : Service() {
                     messages.add(m)
                 }
                 trimMessages()
+                onHistoryLoaded?.invoke()
             }
         } catch (_: Exception) {
         }

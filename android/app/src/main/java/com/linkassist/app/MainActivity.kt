@@ -325,6 +325,11 @@ fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
             LinkService.onMediaSaved = {
                 Handler(Looper.getMainLooper()).post { fileTick++ }
             }
+            LinkService.onHistoryLoaded = {
+                Handler(Looper.getMainLooper()).post {
+                    msgs.clear(); msgs.addAll(LinkService.messages)
+                }
+            }
             // 历史在后台线程异步加载:界面挂载后补一次快照,避免加载完成前丢失显示
             msgs.clear(); msgs.addAll(LinkService.messages)
             transfers.clear(); transfers.addAll(LinkService.transfers)
@@ -337,6 +342,7 @@ fun App(settingsRequest: Int = 0, updateRequest: Int = 0) {
                 LinkService.onHub = null
                 LinkService.onCleared = null
                 LinkService.onMediaSaved = null
+                LinkService.onHistoryLoaded = null
             }
         }
 
